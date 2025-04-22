@@ -14,11 +14,9 @@ import difflib
 from logging.handlers import RotatingFileHandler
 import sv_ttk
 
-
 log_queue = queue.Queue()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
-
 
 try:
     load_dotenv()
@@ -45,16 +43,16 @@ REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp"
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
 
-BLOCK_TARGET_CHARS_REWRITE = 8000 # Target length for local splitting
+BLOCK_TARGET_CHARS_REWRITE = 8000
 MIN_REWRITE_LENGTH_RATIO = 0.50
 MAX_REWRITE_LENGTH_RATIO = 1.8
 SIMILARITY_THRESHOLD = 0.95
 OUTPUT_TOKEN_LIMIT = 4096
-# --- Constants for local block splitting ---
-MIN_BLOCK_LEN_FACTOR = 0.5  # Minimum block size relative to target
-MAX_BLOCK_LEN_FACTOR = 1.5  # Maximum block size relative to target
-SEARCH_RADIUS_FACTOR = 0.1  # Search radius around target end relative to target len
-SPLIT_PRIORITY = ['. ', '! ', '? '] # Order of split sequences to look for
+
+MIN_BLOCK_LEN_FACTOR = 0.5
+MAX_BLOCK_LEN_FACTOR = 1.5
+SEARCH_RADIUS_FACTOR = 0.1
+SPLIT_PRIORITY = ['. ', '! ', '? ']
 
 MAX_RETRIES = 50
 RETRY_DELAY_SECONDS = 3
@@ -76,15 +74,13 @@ STATE_FILENAME_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
 FINAL_OUTPUT_SUFFIX = "_final_rewritten.txt"
 
-
 class BlockInfo(TypedDict):
     block_index: int
     start_char_index: int
     end_char_index: int
-    original_char_length: int # Changed Optional[int] to int
+    original_char_length: int
     processed: bool
     failed_attempts: int
-
 
 class QueueHandler(logging.Handler):
     def __init__(self, log_queue):
@@ -93,7 +89,6 @@ class QueueHandler(logging.Handler):
 
     def emit(self, record):
         self.log_queue.put(self.format(record))
-
 
 def configure_gemini():
     if not GEMINI_API_KEY:
@@ -110,10 +105,7 @@ def configure_gemini():
 def count_chars(text: str) -> int:
     return len(text) if isinstance(text, str) else 0
 
-
 def extract_json_from_response(response_text: str) -> Optional[Dict | List]:
-    # This function might still be useful if other parts of the system expect JSON
-    # but it's not used for block proposal anymore. Kept for potential future use.
     if not response_text:
         logging.error("Невозможно извлечь JSON из пустого ответа.")
         return None
@@ -156,10 +148,7 @@ def extract_json_from_response(response_text: str) -> Optional[Dict | List]:
         logging.debug(f"Полный ответ (начало): {response_text[:500]}...")
         return None
 
-
-
 def check_api_response_safety_and_finish(response: genai.types.GenerateContentResponse, context_msg: str) -> Tuple[Optional[str], Optional[str], bool]:
-    # (Content of this function remains unchanged)
     extracted_text: Optional[str] = None
     error_message: Optional[str] = None
     was_max_tokens = False
@@ -202,7 +191,6 @@ def check_api_response_safety_and_finish(response: genai.types.GenerateContentRe
         except (ValueError, AttributeError) as e_fallback2:
              logging.debug(f"Не удалось получить response.text при ошибке доступа к candidates[0]: {e_fallback2}")
              return None, error_message, False
-
 
     finish_reason_value = 0
     finish_reason_str = "UNKNOWN"
@@ -282,8 +270,6 @@ def check_api_response_safety_and_finish(response: genai.types.GenerateContentRe
          logging.error(error_message, exc_info=True)
          return None, error_message, False
 
-
-
 def find_closest_split_point(
     text: str,
     start_index: int,
@@ -298,16 +284,14 @@ def find_closest_split_point(
     ideal_end = max(ideal_end, start_index + min_len)
     ideal_end = min(ideal_end, start_index + max_len)
 
-
     if ideal_end >= text_len:
         logging.debug(f"  Split: Reached end of text. Split at {text_len}")
         return text_len
 
-    # Define search range around the ideal end point
     search_radius = int((target_end_index - start_index) * SEARCH_RADIUS_FACTOR)
     search_start = max(start_index + min_len, ideal_end - search_radius)
     search_end = min(text_len, ideal_end + search_radius)
-    search_end = min(search_end, start_index + max_len) # Ensure we don't exceed max_len
+    search_end = min(search_end, start_index + max_len)
 
     logging.debug(f"  Split Search: Target={ideal_end}, MinLen={min_len}, MaxLen={max_len} -> "
                   f"Range=[{search_start}, {search_end}], Radius={search_radius}")
@@ -315,25 +299,21 @@ def find_closest_split_point(
     best_split_point = -1
     min_distance = float('inf')
 
-    # Iterate through split sequences by priority
     for seq in split_sequences:
         seq_len = len(seq)
         found_indices = []
         start_search = search_start
         while True:
             try:
-                # Find next occurrence of the sequence within the search range
                 idx = text.index(seq, start_search, search_end)
-                found_indices.append(idx + seq_len) # Store the index *after* the sequence
-                start_search = idx + 1 # Continue search after this find
+                found_indices.append(idx + seq_len)
+                start_search = idx + 1
             except ValueError:
-                break # No more occurrences in the range
+                break
 
         if found_indices:
             logging.debug(f"  Split Search: Found '{seq.replace(chr(10), r'\\n')}' at indices: {found_indices}")
-            # Find the index closest to the ideal end point
             for idx in found_indices:
-                # Ensure the split point respects min_len from start_index
                 if idx > start_index + min_len:
                     distance = abs(idx - ideal_end)
                     if distance < min_distance:
@@ -341,38 +321,28 @@ def find_closest_split_point(
                         best_split_point = idx
                         logging.debug(f"    New best split for '{seq.replace(chr(10), r'\\n')}': {best_split_point} (Dist: {distance})")
                     elif distance == min_distance and idx < best_split_point:
-                         # Prefer earlier split in case of ties for stability
                          best_split_point = idx
                          logging.debug(f"    Tie distance for '{seq.replace(chr(10), r'\\n')}', preferring earlier: {best_split_point}")
 
-
-            # If a split point was found for this priority level, return it
             if best_split_point != -1:
                  logging.info(f"  Best Split Found: Using '{seq.replace(chr(10), r'\\n')}' at index {best_split_point} (closest to {ideal_end})")
                  return best_split_point
 
-    # --- Fallback if no prioritized split sequence was found ---
     logging.warning(f"  Split Search: No priority sequence found in range [{search_start}, {search_end}]. Using fallback.")
 
-    # Fallback 1: Try to find the last space before the ideal_end within max_len
     fallback_search_end = min(ideal_end, start_index + max_len)
-    fallback_search_start = max(start_index + min_len, fallback_search_end - search_radius * 2) # Wider search backwards
+    fallback_search_start = max(start_index + min_len, fallback_search_end - search_radius * 2)
     try:
-        # Find last space strictly before the fallback_search_end
         last_space_index = text.rindex(' ', fallback_search_start, fallback_search_end)
-        if last_space_index > start_index: # Ensure it's after the start
+        if last_space_index > start_index:
             logging.debug(f"  Fallback Split: Using last space at {last_space_index + 1}")
             return last_space_index + 1
     except ValueError:
         logging.debug("  Fallback Split: No space found in fallback range.")
-        pass # No space found
 
-    # Fallback 2: If really nothing found, just return the ideal_end clamped by max_len
-    # This might cut mid-word, but ensures progress and respects max length.
     final_split = min(ideal_end, start_index + max_len)
-    # Ensure we always make progress
     if final_split <= start_index:
-        final_split = min(start_index + min_len, text_len) # Force minimum progress if possible
+        final_split = min(start_index + min_len, text_len)
         logging.warning(f"  Forcing minimum progress split at {final_split} as ideal/max end was <= start.")
 
     logging.warning(f"  Fallback Split: Resorting to clamped ideal/max index: {final_split}")
@@ -390,18 +360,17 @@ def propose_blocks_locally(
 
     blocks: List[BlockInfo] = []
     current_char_index: int = 0
-    block_index: int = 0
+    block_counter: int = 0
 
     min_block_len = int(target_chars_guideline * MIN_BLOCK_LEN_FACTOR)
     max_block_len = int(target_chars_guideline * MAX_BLOCK_LEN_FACTOR)
-    if min_block_len < 10: min_block_len = 10 # Ensure a very small minimum length
-    if max_block_len <= min_block_len : max_block_len = min_block_len + target_chars_guideline # Ensure max > min
+    if min_block_len < 10: min_block_len = 10
+    if max_block_len <= min_block_len : max_block_len = min_block_len + target_chars_guideline
 
     while current_char_index < original_text_length:
-        logging.debug(f"Proposing block {block_index + 1} starting at {current_char_index}")
+        logging.debug(f"Proposing block {block_counter + 1} starting at {current_char_index}")
         target_end_index = current_char_index + target_chars_guideline
 
-        # Find the best split point using the helper function
         actual_end_index = find_closest_split_point(
             text=full_text,
             start_index=current_char_index,
@@ -410,16 +379,14 @@ def propose_blocks_locally(
             max_len=max_block_len
         )
 
-        # Ensure we don't get stuck if find_closest_split_point returns the start index
         if actual_end_index <= current_char_index:
              logging.error(f"Ошибка разбиения: Не удалось найти точку разделения после индекса {current_char_index}. "
                            f"Принудительное разделение в конце текста ({original_text_length}) для завершения.")
              actual_end_index = original_text_length
 
-
         block_length = actual_end_index - current_char_index
         block_info: BlockInfo = {
-            'block_index': block_index,
+            'block_index': block_counter,
             'start_char_index': current_char_index,
             'end_char_index': actual_end_index,
             'original_char_length': block_length,
@@ -427,20 +394,17 @@ def propose_blocks_locally(
             'failed_attempts': 0
         }
         blocks.append(block_info)
-        logging.debug(f"  -> Proposed block {block_index + 1}: [{current_char_index}:{actual_end_index}] Length: {block_length}")
+        logging.debug(f"  -> Proposed block {block_counter + 1}: [{current_char_index}:{actual_end_index}] Length: {block_length}")
 
         current_char_index = actual_end_index
-        block_index += 1
+        block_counter += 1
 
-        # Safety break to prevent infinite loops in case of unexpected logic error
-        if block_index > original_text_length / 10 + 100: # Arbitrary limit
+        if block_counter > original_text_length / 10 + 100:
              logging.critical("КРИТИЧЕСКАЯ ОШИБКА: Слишком много блоков создано, возможно бесконечный цикл в propose_blocks_locally. Прерывание.")
              return None
 
-
     logging.info(f"Локальное предложение блоков завершено. Создано {len(blocks)} блоков.")
 
-    # --- Basic Validation (Optional but good practice) ---
     if blocks:
         last_block_end = blocks[-1]['end_char_index']
         if last_block_end != original_text_length:
@@ -455,14 +419,13 @@ def propose_blocks_locally(
 
     return blocks
 
-
 def build_rewrite_prompt(target_language: str, target_style: str, rewriting_goal: str, full_context_with_markers: str, original_segment_length: int) -> str:
     min_len_target = int(original_segment_length * MIN_REWRITE_LENGTH_RATIO)
     max_len_target = int(original_segment_length * MAX_REWRITE_LENGTH_RATIO)
 
     prompt = f"""**Роль:** Внимательный ИИ-редактор, сфокусированный на качестве и точности.
 **Задача:** Перепиши ТОЛЬКО сегмент текста, заключенный между `{START_MARKER}` и `{END_MARKER}`. Используй окружающий текст (ДО и ПОСЛЕ маркеров) ИСКЛЮЧИТЕЛЬНО как контекст для стиля и сюжета, но НЕ переписывай его.
-**Параметры:**
+**Параметры:** 
 *   **Язык:** {target_language}
 *   **Стиль:** {target_style}
 *   **Цель:** {rewriting_goal}
@@ -487,14 +450,12 @@ def build_rewrite_prompt(target_language: str, target_style: str, rewriting_goal
 """
     return prompt
 
-
 def call_gemini_rewrite_api(
     prompt: str,
     model_name: str,
     original_block_length: int,
     original_block_content: str
     ) -> Optional[str]:
-    # (Content of this function remains unchanged)
     try:
         model = genai.GenerativeModel(model_name)
     except Exception as e:
@@ -532,7 +493,6 @@ def call_gemini_rewrite_api(
                     validation_error = f"{context_msg}: Переписанный текст ошибочно содержит маркеры '{START_MARKER}' или '{END_MARKER}'."
 
                 elif original_block_content and rewritten_text:
-                    # Avoid comparing whitespace-only blocks or identical blocks
                     if original_block_content.strip() and rewritten_text.strip() and original_block_content != rewritten_text:
                         matcher = difflib.SequenceMatcher(None, original_block_content, rewritten_text, autojunk=False)
                         similarity_ratio = matcher.ratio()
@@ -543,13 +503,10 @@ def call_gemini_rewrite_api(
                     elif original_block_content == rewritten_text:
                           logging.debug("  Текст идентичен оригиналу, пропуск проверки схожести (валидно).")
 
-
                 if validation_passed and original_block_length > 0:
                     rewritten_len = count_chars(rewritten_text)
-                    # Allow slightly more flexibility for very small blocks where ratios are sensitive
                     min_allowed_len = original_block_length * MIN_REWRITE_LENGTH_RATIO if original_block_length > 50 else original_block_length * 0.5
                     max_allowed_len = original_block_length * MAX_REWRITE_LENGTH_RATIO + 10 if original_block_length > 50 else original_block_length * 2.0 + 10
-
 
                     logging.debug(f"  Проверка длины: Оригинал={original_block_length}, Переписано={rewritten_len}, Мин={min_allowed_len:.0f}, Макс={max_allowed_len:.0f}")
 
@@ -557,13 +514,11 @@ def call_gemini_rewrite_api(
                         validation_passed = False
                         validation_error = f"{context_msg}: Текст слишком длинный ({rewritten_len} > {max_allowed_len:.0f} симв., >{MAX_REWRITE_LENGTH_RATIO*100:.0f}% от {original_block_length})."
                     elif rewritten_len < min_allowed_len:
-                        # Don't fail for extremely short original blocks getting slightly shorter/empty
                         if original_block_length > 20 or (rewritten_len == 0 and original_block_length > 5):
                              validation_passed = False
                              validation_error = f"{context_msg}: Текст слишком короткий ({rewritten_len} < {min_allowed_len:.0f} симв., <{MIN_REWRITE_LENGTH_RATIO*100:.0f}% от {original_block_length})."
                         else:
                              logging.debug(f"  Пропуск проверки мин. длины для очень короткого блока (оригинал={original_block_length}, переписано={rewritten_len})")
-
 
                 if validation_passed:
                     logging.debug(f"  {context_msg}: Валидация переписанного блока пройдена.")
@@ -597,7 +552,6 @@ def call_gemini_rewrite_api(
     logging.error("Неожиданно завершен цикл call_gemini_rewrite_api.")
     return None
 
-
 def save_state(filename: str, data: Dict):
     temp_filename = filename + ".tmp"
     try:
@@ -616,7 +570,6 @@ def save_state(filename: str, data: Dict):
                 os.remove(temp_filename)
         except Exception as e_rem:
              logging.error(f"Не удалось удалить временный файл состояния {temp_filename}: {e_rem}")
-
 
 def load_state(filename: str) -> Optional[Dict]:
     state = None
@@ -664,12 +617,9 @@ def load_state(filename: str) -> Optional[Dict]:
             elif not os.path.exists(filename):
                  logging.info(f"Файл состояния {filename} не найден (ни основной, ни временный).")
 
-
     return state if valid_state_loaded else None
 
-
 def validate_state_data(state: Dict, filename: str) -> bool:
-    # (Content of this function remains largely unchanged)
     try:
         required_keys = ['processed_block_index', 'original_blocks_data', 'total_blocks']
         if not all(key in state for key in required_keys):
@@ -699,14 +649,12 @@ def validate_state_data(state: Dict, filename: str) -> bool:
         if state['original_blocks_data']:
              first_block = state['original_blocks_data'][0]
              if isinstance(first_block, dict):
-                 # Adjusted keys slightly based on BlockInfo definition
                  block_keys = ['block_index', 'start_char_index', 'end_char_index', 'original_char_length', 'processed', 'failed_attempts']
                  if not all(key in first_block for key in block_keys):
                      missing = [k for k in block_keys if k not in first_block]
                      logging.warning(f"Первый блок в '{filename}' не содержит ожидаемых ключей (отсутствуют: {missing}). Структура может быть нарушена.")
              else:
                   logging.warning(f"Первый элемент в 'original_blocks_data' в '{filename}' не является словарем (тип: {type(first_block)}).")
-
 
         logging.debug(f"Файл состояния '{filename}' прошел базовую проверку.")
         return True
@@ -719,7 +667,6 @@ def validate_state_data(state: Dict, filename: str) -> bool:
          return False
 
 def save_intermediate_file(filename: str, content: str, context_msg: str = ""):
-    # (Content of this function remains unchanged)
     temp_filename = filename + ".tmp"
     try:
         with open(temp_filename, 'w', encoding='utf-8') as f_inter:
@@ -737,8 +684,6 @@ def save_intermediate_file(filename: str, content: str, context_msg: str = ""):
         except Exception as e_rem:
             logging.error(f"Не удалось удалить временный промежуточный файл {temp_filename}: {e_rem}")
 
-
-# --- Modified Function Signature and Logic ---
 def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     input_file = params['input_file']
     output_file = params['output_file']
@@ -762,9 +707,7 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     logging.info(f"Файл состояния: {state_file}")
     logging.info(f"Промежуточный файл: {intermediate_file}")
     logging.info(f"Язык: {target_language}, Стиль: '{target_style[:50]}...', Цель: '{rewriting_goal[:50]}...'")
-    # Adjusted log message for models
     logging.info(f"Модель Переписывания: '{rewriter_model}' (Предложение блоков: Локальное)")
-    # Adjusted log message for options
     logging.info(f"Опции: Возобновить={resume}, Интервал сохр.={save_interval}")
     logging.info(f"Целевая длина блока (локально): {BLOCK_TARGET_CHARS_REWRITE}")
     logging.info(f"Порог схожести: {SIMILARITY_THRESHOLD*100:.1f}%")
@@ -775,7 +718,7 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         logging.info(f"Выходная директория '{output_dir}' существует или создана.")
     except OSError as e:
          logging.error(f"Не удалось создать выходную директорию '{output_dir}': {e}")
-         if tk.Toplevel.winfo_exists(root): # Check if GUI exists
+         if tk.Toplevel.winfo_exists(root):
             messagebox.showerror("Ошибка директории", f"Невозможно создать/получить доступ к выходной директории:\n{output_dir}\n\nОшибка: {e}")
          return
 
@@ -811,7 +754,7 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             logging.info("Файл состояния успешно загружен и валидирован.")
             try:
                 processed_block_index = state['processed_block_index']
-                original_blocks_data = state['original_blocks_data'] # Load the blocks structure from state
+                original_blocks_data = state['original_blocks_data']
                 total_blocks = state['total_blocks']
 
                 if not original_blocks_data:
@@ -822,13 +765,6 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                         with open(intermediate_file, 'r', encoding='utf-8') as f_inter:
                             current_rewritten_book_text = f_inter.read()
                         logging.info(f"Загружен промежуточный текст ({count_chars(current_rewritten_book_text)} симв.) из {intermediate_file}")
-                        # Basic consistency check (optional)
-                        if total_blocks > 0 and original_blocks_data:
-                             last_block_end_index_state = original_blocks_data[-1].get('end_char_index', -1)
-                             # Estimate expected length based on last processed block and remaining original lengths
-                             # This is complex; simpler check: just log if loaded text seems very different
-                             # For now, just proceed if loaded.
-
                         state_loaded = True
                     except Exception as e_inter_load:
                          logging.error(f"Ошибка загрузки промежуточного файла '{intermediate_file}': {e_inter_load}. Возобновление невозможно.")
@@ -841,7 +777,7 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                     logging.info(f"Возобновление успешно. Всего блоков: {total_blocks}. Следующий блок для обработки: {processed_block_index + 2} (индекс {processed_block_index + 1}).")
                 else:
                     logging.warning("Не удалось загрузить промежуточный текст. Перезапуск процесса.")
-                    resume = False # Force restart if intermediate file fails
+                    resume = False
                     processed_block_index = -1
                     original_blocks_data = []
                     current_rewritten_book_text = None
@@ -860,19 +796,16 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             resume = False
             state_loaded = False
 
-    # --- Initialization or Restart Logic ---
     if not state_loaded:
         logging.info("Запуск нового процесса или перезапуск после неудачного возобновления.")
-        current_rewritten_book_text = original_book_text # Start with original text
+        current_rewritten_book_text = original_book_text
         processed_block_index = -1
         original_blocks_data = []
         total_blocks = 0
 
         logging.info(f"Создание/перезапись начального промежуточного файла: {intermediate_file}")
-        # Save the initial state (original text) to intermediate file
         save_intermediate_file(intermediate_file, current_rewritten_book_text, "Начальное создание")
 
-        # --- Replace LLM proposal with local proposal ---
         logging.info("Запуск локального предложения блоков...")
         proposed_blocks = propose_blocks_locally(
             original_book_text,
@@ -883,10 +816,9 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             original_blocks_data = proposed_blocks
             total_blocks = len(original_blocks_data)
             logging.info(f"Инициализация завершена. Всего блоков для обработки: {total_blocks}")
-            # --- Save initial state immediately after proposing blocks ---
             logging.info(f"Сохранение начального состояния после определения блоков...")
             initial_state_data = {
-                'processed_block_index': -1, # Starts at -1
+                'processed_block_index': -1,
                 'original_blocks_data': original_blocks_data,
                 'total_blocks': total_blocks,
                 'timestamp': time.time(),
@@ -902,14 +834,12 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             if tk.Toplevel.winfo_exists(root): messagebox.showerror("Ошибка инициализации", error_msg + "\n\nПроверьте лог на возможные ошибки в тексте или логике разбиения.")
             return
 
-    # --- Checks before starting the main loop ---
     if not original_blocks_data or total_blocks <= 0:
         error_msg = "КРИТИЧЕСКАЯ ОШИБКА: Отсутствуют данные о блоках для начала переписывания (после инициализации/загрузки)."
         logging.critical(error_msg)
         if tk.Toplevel.winfo_exists(root): messagebox.showerror("Ошибка выполнения", error_msg)
         return
     if current_rewritten_book_text is None:
-        # This should theoretically not happen if initialization or resume worked
         error_msg = "КРИТИЧЕСКАЯ ОШИБКА: Текст для переписывания не инициализирован (current_rewritten_book_text is None) перед основным циклом."
         logging.critical(error_msg)
         if tk.Toplevel.winfo_exists(root): messagebox.showerror("Критическая ошибка", error_msg + "\n\nВнутренняя ошибка программы.")
@@ -919,22 +849,17 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     logging.info(f"Всего блоков: {total_blocks}. Начинаем с блока {processed_block_index + 2} (индекс {processed_block_index + 1}).")
 
     if progress_callback:
-        # Initialize progress bar correctly based on loaded state
         progress_callback(processed_block_index + 1, total_blocks)
 
     critical_error_occurred = False
 
-    # --- Main Processing Loop ---
-    # Start loop from 0, skipping already processed blocks is handled inside
     for i in range(total_blocks):
         if stop_event and stop_event.is_set():
             logging.warning(f"Получен сигнал остановки перед обработкой блока {i+1}.")
             break
 
         try:
-            # Get block info for the *current* iteration index 'i'
-            current_block_info = original_blocks_data[i] # Direct access, assuming list index matches block index
-            # Sanity check block_index field against loop index
+            current_block_info = original_blocks_data[i]
             if current_block_info['block_index'] != i:
                  logging.warning(f"Несоответствие индекса блока: в данных {current_block_info['block_index']}, ожидался индекс цикла {i}. Используем данные блока как есть.")
         except IndexError:
@@ -950,60 +875,49 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
              critical_error_occurred = True
              break
 
-
-        # --- Skip processed blocks based on loaded state ---
         if i <= processed_block_index:
             logging.debug(f"Пропуск уже обработанного блока {i+1}/{total_blocks} (индекс {i} <= processed {processed_block_index}).")
             if progress_callback: progress_callback(i + 1, total_blocks)
             continue
 
-        # --- Additional checks on the current block before processing ---
         if current_block_info.get('processed', False):
-            # This case should ideally not be reached if i > processed_block_index, indicates state inconsistency
             logging.warning(f"Пропуск блока {i+1}, помеченного 'processed=True', хотя индекс цикла {i} > processed_block_index ({processed_block_index}). Возможно, ошибка в файле состояния или логике. Обновляем processed_block_index.")
-            processed_block_index = i # Try to recover by updating processed index
+            processed_block_index = i
             if progress_callback: progress_callback(i + 1, total_blocks)
             continue
 
         if current_block_info.get('failed_attempts', 0) >= MAX_RETRIES:
             logging.warning(f"Пропуск блока {i+1} из-за превышения лимита неудачных попыток ({current_block_info.get('failed_attempts', 0)} >= {MAX_RETRIES}).")
-            # Ensure 'processed' is False if skipping due to failures
             original_blocks_data[i]['processed'] = False
             if progress_callback: progress_callback(i + 1, total_blocks)
             continue
 
         start_index = current_block_info['start_char_index']
         end_index = current_block_info['end_char_index']
-        # Use the length stored in the block data as the 'original' length reference for this rewrite attempt
         original_len_from_data = current_block_info.get('original_char_length', end_index - start_index)
         if original_len_from_data <= 0 and (end_index - start_index > 0):
             logging.warning(f"  Длина блока {i+1} из данных ({original_len_from_data}) некорректна. Используем расчетную {end_index - start_index}.")
             original_len_from_data = end_index - start_index
 
-
         logging.info(f"\n>>> Обработка блока {i+1}/{total_blocks} (Индекс {i}) | Символы [{start_index}:{end_index}] | Длина (исходная): {original_len_from_data} <<<")
 
         current_text_len = count_chars(current_rewritten_book_text)
 
-        # --- Validate indices against *current* text length ---
         if not (0 <= start_index <= current_text_len):
             logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА: Начальный индекс блока {i+1} ({start_index}) вне диапазона текущего текста (0..{current_text_len}). Рассинхронизация индексов. Прерывание.")
             critical_error_occurred = True
             break
-        # Adjust end index based on current text length *if needed* (should ideally match due to index updates)
+
         adjusted_end_index = min(end_index, current_text_len)
         if adjusted_end_index != end_index:
             logging.warning(f"  Конечный индекс блока {i+1} ({end_index}) скорректирован на {adjusted_end_index} из-за текущей длины текста ({current_text_len}). Возможен дрейф индексов.")
 
         if adjusted_end_index < start_index:
              logging.warning(f"  Предупреждение: Скорректированный end_index ({adjusted_end_index}) < start_index ({start_index}) для блока {i+1}. Блок будет пустым при извлечении.")
-             adjusted_end_index = start_index # Ensure end is not before start
+             adjusted_end_index = start_index
 
-
-        # --- Check for gaps/overlaps based on *stored* indices ---
         if i > 0:
              try:
-                # Use the end_char_index stored in the PREVIOUS block's data
                 prev_block_end_index_stored = original_blocks_data[i-1]['end_char_index']
                 if start_index != prev_block_end_index_stored:
                     gap = start_index - prev_block_end_index_stored
@@ -1013,93 +927,72 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
              except KeyError:
                  logging.error(f"  Отсутствует ключ 'end_char_index' у предыдущего блока ({i-1}).")
 
-        # --- Extract content using potentially adjusted indices ---
         try:
             block_content_to_rewrite = current_rewritten_book_text[start_index:adjusted_end_index]
             actual_extracted_len = len(block_content_to_rewrite)
-
-            # The length passed to the rewriter API should be the *actual* length extracted
             block_len_for_api = actual_extracted_len
-            # Log difference between originally calculated length and current length if significant
             if abs(original_len_from_data - actual_extracted_len) > 5:
                  logging.warning(f"  Длина блока {i+1} по данным ({original_len_from_data}) не совпадает с фактической длиной извлеченного текста ({actual_extracted_len}). Используем фактическую ({actual_extracted_len}) для API.")
-
             logging.debug(f"  Содержимое для переписывания (длина {block_len_for_api}, начало): '{block_content_to_rewrite[:100].replace(chr(10),' ')}...'")
         except IndexError:
              logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА ИНДЕКСАЦИИ при извлечении текста блока {i+1} [{start_index}:{adjusted_end_index}] из текста длиной {current_text_len}. Прерывание.")
              critical_error_occurred = True
              break
 
-        # --- Prepare text for API ---
         try:
-            # Insert markers around the actual extracted content
             text_for_api = (
                 current_rewritten_book_text[:start_index]
                 + START_MARKER
                 + block_content_to_rewrite
                 + END_MARKER
-                + current_rewritten_book_text[adjusted_end_index:] # Use adjusted index here
+                + current_rewritten_book_text[adjusted_end_index:]
             )
         except Exception as e_concat:
             logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА при конкатенации текста для API блока {i+1}: {e_concat}. Прерывание.", exc_info=True)
             critical_error_occurred = True
             break
 
-        # --- Build Prompt and Call API ---
         rewrite_prompt = build_rewrite_prompt(
             target_language, target_style, rewriting_goal, text_for_api,
-            block_len_for_api # Pass the actual length being rewritten
+            block_len_for_api
         )
 
         rewritten_block_text = call_gemini_rewrite_api(
             prompt=rewrite_prompt,
             model_name=rewriter_model,
-            original_block_length=block_len_for_api, # Pass actual length
+            original_block_length=block_len_for_api,
             original_block_content=block_content_to_rewrite
         )
 
-        # --- Process Result ---
         block_processed_successfully = False
         if rewritten_block_text is not None:
             rewritten_len = count_chars(rewritten_block_text)
-            # Calculate delta based on the length that was *actually* replaced
             delta = rewritten_len - block_len_for_api
 
             logging.info(f"  Блок {i+1} успешно переписан и прошел валидацию. Исходная длина (извлеч.): {block_len_for_api}, Новая длина: {rewritten_len}, Дельта: {delta:+}")
             logging.debug(f"  Переписанное содержимое (начало): '{rewritten_block_text[:100].replace(chr(10),' ')}...'")
 
             try:
-                # Replace the segment defined by [start_index:adjusted_end_index]
                 current_rewritten_book_text = (
                     current_rewritten_book_text[:start_index]
                     + rewritten_block_text
-                    + current_rewritten_book_text[adjusted_end_index:] # Use adjusted index
+                    + current_rewritten_book_text[adjusted_end_index:]
                 )
                 block_processed_successfully = True
-                # Save intermediate result immediately after successful replacement
                 save_intermediate_file(intermediate_file, current_rewritten_book_text, f"После блока {i+1}")
-
             except Exception as e_replace:
                  logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА при замене текста для блока {i+1}: {e_replace}. Прерывание.", exc_info=True)
                  block_processed_successfully = False
                  critical_error_occurred = True
-                 # break # Exit loop immediately on critical error
 
-
-            # --- Update Block Data and Indices if successful ---
             if block_processed_successfully:
                 try:
-                    # Update the end index of the *current* block based on the *new* length
                     new_end_index = start_index + rewritten_len
                     original_blocks_data[i]['end_char_index'] = new_end_index
-                    # Keep original_char_length as the length *before* this rewrite for potential future reference?
-                    # Or update it to the new length? Let's keep the original length for now.
-                    # original_blocks_data[i]['original_char_length'] = rewritten_len # Option to update
                     original_blocks_data[i]['processed'] = True
                     original_blocks_data[i]['failed_attempts'] = 0
-                    processed_block_index = i # Update the global processed index tracker
+                    processed_block_index = i
 
-                    # --- Update subsequent block indices ---
                     if delta != 0:
                          logging.debug(f"  Обновление индексов для {total_blocks - (i + 1)} последующих блоков на delta={delta}...")
                          for j in range(i + 1, total_blocks):
@@ -1112,99 +1005,73 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                 except IndexError as e_idx_update:
                      logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА (IndexError) при обновлении индексов блока {i} или последующих: {e_idx_update}. Прерывание.", exc_info=False)
                      critical_error_occurred = True
-                     # break
                 except KeyError as e_key_update:
                      logging.critical(f"  КРИТИЧЕСКАЯ ОШИБКА (KeyError) при обновлении данных блока {i} или последующих: {e_key_update}. Прерывание.", exc_info=False)
                      critical_error_occurred = True
-                     # break
                 except Exception as e_update:
                      logging.critical(f"  КРИТИЧЕСКАЯ НЕОЖИДАННАЯ ОШИБКА при обновлении данных блоков: {e_update}. Прерывание.", exc_info=True)
                      critical_error_occurred = True
-                     # break
-            # End if block_processed_successfully
         else:
-            # --- Handle Rewrite Failure ---
             logging.error(f"  Не удалось переписать блок {i+1} (после {MAX_RETRIES} попыток или из-за ошибки/валидации). Оригинал ОСТАВЛЕН в тексте.")
-            block_processed_successfully = False # Explicitly set
-
-            # Update failure count, keep 'processed' as False
+            block_processed_successfully = False
             try:
-                 # Use a temporary variable to avoid modifying dict while accessing it if issues arise
                  current_attempts = original_blocks_data[i].get('failed_attempts', 0)
                  original_blocks_data[i]['failed_attempts'] = current_attempts + 1
                  original_blocks_data[i]['processed'] = False
                  logging.info(f"  Увеличено число неудачных попыток для блока {i+1} до {original_blocks_data[i]['failed_attempts']}")
             except (IndexError, KeyError, TypeError) as e:
                  logging.error(f"  Ошибка обновления статуса неудачи для блока {i}: {e}")
-            # Note: Indices are NOT updated if the block failed, as the text content didn't change.
 
-
-        # --- Update Progress Bar ---
         if progress_callback:
-            progress_callback(i + 1, total_blocks) # Progress is i+1 out of total_blocks
+            progress_callback(i + 1, total_blocks)
 
-        # --- Save State Periodically or After Failure ---
         should_save_state = False
         save_reason = ""
-        # Save if interval is met AND the block was processed (successfully or failed+skipped)
         if save_interval > 0 and ((i + 1) % save_interval == 0):
             should_save_state = True
             save_reason = f"(интервал {save_interval})"
-        # Save if a block failed but hasn't reached max retries yet
         elif not block_processed_successfully and original_blocks_data[i].get('failed_attempts', 0) < MAX_RETRIES:
             should_save_state = True
             save_reason = "(после ошибки блока)"
-        # Always save after the last block is attempted
         elif i == total_blocks - 1:
             should_save_state = True
             save_reason = "(финальное после цикла)"
 
         if should_save_state:
             logging.info(f"Сохранение промежуточного состояния {save_reason} после попытки блока {i+1}...")
-            # Ensure processed_block_index reflects the last *successfully* completed block
             state_data = {
-                'processed_block_index': processed_block_index, # Index of last SUCCESSFUL block
-                'original_blocks_data': original_blocks_data, # Current state of ALL blocks
+                'processed_block_index': processed_block_index,
+                'original_blocks_data': original_blocks_data,
                 'total_blocks': total_blocks,
                 'timestamp': time.time(),
-                'last_processed_block_index_in_loop': i, # Index reached in the loop
+                'last_processed_block_index_in_loop': i,
                 'status_at_save': 'success' if block_processed_successfully else ('failed_or_skipped' if i <= processed_block_index else 'failed_attempt'),
                 'params': {k: v for k, v in params.items() if k not in ['input_file', 'output_file', 'style', 'goal']}
             }
             save_state(state_file, state_data)
 
-        # --- Check stop signal again after saving ---
         if stop_event and stop_event.is_set():
             logging.warning(f"Сигнал остановки обработан после завершения действий для блока {i+1}.")
             break
 
-        # --- Exit loop immediately if critical error occurred ---
         if critical_error_occurred:
              logging.critical("Критическая ошибка обнаружена во время обработки блока. Прерывание основного цикла.")
              break
 
-    # --- End of Main Processing Loop ---
-
     logging.info(f"\n{'='*15} Основной цикл переписывания завершен {'='*15}")
 
-    # --- Final Statistics Calculation ---
     final_processed_count = sum(1 for b in original_blocks_data if b.get('processed'))
-    # Failed means attempted MAX_RETRIES times OR critical error stopped processing it
     final_failed_count = sum(1 for idx, b in enumerate(original_blocks_data)
-                              if not b.get('processed') and (b.get('failed_attempts', 0) >= MAX_RETRIES or (critical_error_occurred and idx == i) )) # 'i' holds last attempted index
-    # Skipped means loop finished or was stopped before reaching this block
+                              if not b.get('processed') and (b.get('failed_attempts', 0) >= MAX_RETRIES or (critical_error_occurred and idx == i) ))
     last_loop_index = i if 'i' in locals() and not critical_error_occurred else processed_block_index if critical_error_occurred else total_blocks -1
-    # Count blocks after the last successfully processed one that weren't marked as failed
     final_skipped_or_pending_count = sum(1 for idx, b in enumerate(original_blocks_data)
                                          if idx > processed_block_index and not b.get('processed') and b.get('failed_attempts', 0) < MAX_RETRIES)
-
 
     logging.info(f"--- Итоговая Статистика ---")
     logging.info(f"  Всего блоков: {total_blocks}")
     logging.info(f"  Успешно обработано (processed=True): {final_processed_count}")
     if final_failed_count > 0:
         logging.warning(f"  Не удалось обработать (макс. попыток / крит. ошибка): {final_failed_count}")
-    # Distinguish between skipped due to stop/error vs. simply not reached yet
     if final_skipped_or_pending_count > 0:
         status_reason = ""
         if critical_error_occurred: status_reason = "(из-за критической ошибки)"
@@ -1212,8 +1079,6 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         elif final_processed_count + final_failed_count < total_blocks: status_reason = "(не завершено)"
         logging.warning(f"  Пропущено / Ожидает обработки: {final_skipped_or_pending_count} {status_reason}")
 
-
-    # --- Determine Final Status ---
     final_status = "unknown"
     if critical_error_occurred: final_status = "критическая ошибка"
     elif stop_event and stop_event.is_set(): final_status = "прервано пользователем"
@@ -1224,11 +1089,8 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
 
     logging.info(f"Финальный Статус: {final_status}")
 
-    # --- Save Final Output File ---
     if final_output_file:
-        # Save if any blocks were processed, or if stopped/errored, or if it was a fresh run
         should_save_final = (processed_block_index >= 0) or critical_error_occurred or (stop_event and stop_event.is_set()) or (not resume and not state_loaded)
-
         if should_save_final and current_rewritten_book_text is not None:
             final_text_len = count_chars(current_rewritten_book_text)
             logging.info(f"Сохранение итогового текста (длина {final_text_len}) в: {final_output_file}")
@@ -1251,7 +1113,6 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     else:
         logging.warning("Имя итогового файла не указано. Итоговый текст НЕ сохранен.")
 
-    # --- Save Final State File ---
     logging.info("Сохранение финального файла состояния...")
     final_state_data = {
         'processed_block_index': processed_block_index,
@@ -1270,20 +1131,17 @@ def run_rewrite_process(params: Dict, progress_callback=None, stop_event=None):
 
     logging.info(f"--- Процесс переписывания завершен (Статус: {final_status}) ---")
 
-
 class BookRewriterApp:
     def __init__(self, master):
         self.master = master
-        # Updated Title
         master.title("AI Book Rewriter v1.8.0 (Gemini + Local Split + Resume)")
-        master.geometry("950x750") # Adjusted height slightly
-        master.minsize(800, 600) # Adjusted min height
+        master.geometry("950x750")
+        master.minsize(800, 600)
 
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.rewrite_thread = None
         self.stop_event = threading.Event()
 
-        # --- Style setup (remains the same) ---
         style = ttk.Style()
         style.configure("TLabel", padding=5)
         style.configure("TButton", padding=5)
@@ -1328,7 +1186,6 @@ class BookRewriterApp:
         settings_frame.pack(pady=10, padx=5, fill=tk.X)
         settings_frame.columnconfigure(1, weight=1)
 
-        # --- Input/Output/Language (remain the same) ---
         ttk.Label(settings_frame, text="Входной файл (.txt):*").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
         self.input_file_var = tk.StringVar()
         self.input_entry = ttk.Entry(settings_frame, textvariable=self.input_file_var, width=80)
@@ -1349,7 +1206,6 @@ class BookRewriterApp:
         self.language_combo = ttk.Combobox(settings_frame, textvariable=self.language_var, values=languages, state="readonly", width=18)
         self.language_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=3)
 
-        # --- Style/Goal Text Areas (remain the same) ---
         ttk.Label(settings_frame, text="Желаемый стиль:*").grid(row=3, column=0, sticky=tk.NW, padx=5, pady=(5,0))
         self.style_text = tk.Text(settings_frame, height=4, width=80, wrap=tk.WORD,
                                   relief=tk.SOLID, borderwidth=1,
@@ -1371,35 +1227,29 @@ class BookRewriterApp:
         self.setup_placeholder(self.style_text, self.style_placeholder, text_fg)
         self.setup_placeholder(self.goal_text, self.goal_placeholder, text_fg)
 
-        # --- Advanced Options Frame (Modified) ---
         adv_frame = ttk.LabelFrame(settings_frame, text="Расширенные опции")
         adv_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, padx=5, pady=(10, 5))
         adv_frame.columnconfigure(1, weight=1)
 
-        # Row 0: Info label
         adv_info_label_text = (f"Порог схожести: {SIMILARITY_THRESHOLD*100:.0f}% | "
                                f"Целевая длина блока: {BLOCK_TARGET_CHARS_REWRITE} симв.")
         adv_info_label = ttk.Label(adv_frame, text=adv_info_label_text, font=("TkDefaultFont", 8, "italic"))
         adv_info_label.grid(row=0, column=0, columnspan=3, padx=5, pady=(0,5), sticky=tk.W)
 
-        # Row 1: Resume Checkbox
         self.resume_var = tk.BooleanVar(value=True)
         self.resume_check = ttk.Checkbutton(adv_frame, text="Возобновить с последнего состояния", variable=self.resume_var)
         self.resume_check.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 
-        # Row 2: Save Interval
         ttk.Label(adv_frame, text="Интервал сохр. (блоков, 0=в конце):").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
         self.save_interval_var = tk.IntVar(value=1)
         self.save_interval_spin = ttk.Spinbox(adv_frame, from_=0, to=100, textvariable=self.save_interval_var, width=6, state="readonly")
         self.save_interval_spin.grid(row=2, column=1, padx=(5,15), pady=5, sticky=tk.W)
 
-        # Row 3: Rewriter Model
         ttk.Label(adv_frame, text="Модель писателя:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         self.rewriter_model_var = tk.StringVar(value=REWRITER_MODEL_DEFAULT)
         self.rewriter_combo = ttk.Combobox(adv_frame, textvariable=self.rewriter_model_var, values=AVAILABLE_MODELS, state="readonly", width=25)
         self.rewriter_combo.grid(row=3, column=1, columnspan=2, padx=5, pady=5, sticky=tk.EW)
 
-        # --- Control Frame (remains the same) ---
         control_frame = ttk.Frame(main_frame, padding="5 0 5 0")
         control_frame.pack(pady=5, padx=5, fill=tk.X)
 
@@ -1416,7 +1266,6 @@ class BookRewriterApp:
         self.progressbar = ttk.Progressbar(control_frame, orient=tk.HORIZONTAL, length=200, mode='determinate')
         self.progressbar.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 5), ipady=3)
 
-        # --- Log Frame (remains the same) ---
         log_frame = ttk.LabelFrame(main_frame, text="Лог выполнения")
         log_frame.pack(pady=(5, 0), padx=5, fill=tk.BOTH, expand=True)
 
@@ -1428,7 +1277,6 @@ class BookRewriterApp:
                                                  selectbackground=select_bg, selectforeground=select_fg)
         self.log_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # --- Logging Setup (remains the same) ---
         gui_handler = QueueHandler(log_queue)
         gui_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
         logger.addHandler(gui_handler)
@@ -1438,8 +1286,6 @@ class BookRewriterApp:
 
         ttk.Label(settings_frame, text="* Обязательные поля", font=("TkDefaultFont", 8, "italic")).grid(row=0, column=3, sticky=tk.E, padx=5)
 
-
-    # --- Placeholder Logic (remains the same) ---
     def setup_placeholder(self, widget: tk.Text, placeholder: str, normal_fg_color: str):
         self.normal_text_color = normal_fg_color
         widget.bind("<FocusIn>", lambda args, w=widget, p=placeholder: self.clear_placeholder(w, p))
@@ -1460,7 +1306,6 @@ class BookRewriterApp:
             widget.insert("1.0", placeholder)
             widget.configure(foreground=self.placeholder_color)
 
-    # --- File Browsing Logic (remains the same) ---
     def browse_input(self):
         filename = filedialog.askopenfilename(
             title="Выберите входной файл",
@@ -1492,7 +1337,6 @@ class BookRewriterApp:
         if filename:
             self.output_file_var.set(filename)
 
-    # --- Log Queue Processing (remains the same) ---
     def process_log_queue(self):
         try:
             while True:
@@ -1507,8 +1351,6 @@ class BookRewriterApp:
             if self.master.winfo_exists():
                 self.master.after(100, self.process_log_queue)
 
-
-    # --- Progress Bar Updates (remain the same) ---
     def update_progress(self, current_block_num, total_blocks):
         if not self.master.winfo_exists(): return
 
@@ -1521,9 +1363,9 @@ class BookRewriterApp:
             self.status_label_var.set(status_text)
         else:
              self.progressbar['value'] = 0
-             self.progressbar['maximum'] = 1 # Avoid division by zero if total_blocks is 0
+             self.progressbar['maximum'] = 1
              if current_block_num == 0 and self.rewrite_thread is not None and self.rewrite_thread.is_alive():
-                 status_text = "Определение блоков..." # Updated status message
+                 status_text = "Определение блоков..."
              else:
                 status_text = "Инициализация..." if self.rewrite_thread is not None and self.rewrite_thread.is_alive() else "Готов."
              self.status_label_var.set(status_text)
@@ -1540,7 +1382,6 @@ class BookRewriterApp:
         button_entry_check_state = tk.DISABLED if running else tk.NORMAL
         start_button_state = tk.DISABLED if running else tk.NORMAL
         stop_button_state = tk.NORMAL if running else tk.DISABLED
-        # Make combos/spinbox readonly when not running, disabled when running
         combo_spin_state = tk.DISABLED if running else 'readonly'
         text_widget_state = tk.DISABLED if running else tk.NORMAL
 
@@ -1557,19 +1398,11 @@ class BookRewriterApp:
         self.start_button.configure(state=start_button_state)
         self.stop_button.configure(state=stop_button_state)
 
-        # Restore placeholders only if UI is being enabled
         if not running:
             if hasattr(self, 'style_placeholder'):
                 self.restore_placeholder(self.style_text, self.style_placeholder)
             if hasattr(self, 'goal_placeholder'):
                 self.restore_placeholder(self.goal_text, self.goal_placeholder)
-        # Clear placeholders if UI is being disabled (optional, but can prevent confusion)
-        # else:
-        #     if hasattr(self, 'style_placeholder'):
-        #         self.clear_placeholder(self.style_text, self.style_placeholder)
-        #     if hasattr(self, 'goal_placeholder'):
-        #         self.clear_placeholder(self.goal_text, self.goal_placeholder)
-
 
     def start_rewrite(self):
         input_file = self.input_file_var.get().strip()
@@ -1577,13 +1410,11 @@ class BookRewriterApp:
         style = self.style_text.get("1.0", tk.END).strip()
         goal = self.goal_text.get("1.0", tk.END).strip()
 
-        # --- Placeholder check (remains the same) ---
         if hasattr(self, 'style_placeholder') and style == self.style_placeholder:
             style = ""
         if hasattr(self, 'goal_placeholder') and goal == self.goal_placeholder:
             goal = ""
 
-        # --- Input Validation (remains largely the same) ---
         errors = []
         if not input_file:
             errors.append("- Входной файл не указан.")
@@ -1597,19 +1428,16 @@ class BookRewriterApp:
         else:
              output_dir = os.path.dirname(output_file) or '.'
              try:
-                 # Attempt to create dir and check write access
                  os.makedirs(output_dir, exist_ok=True)
-                 # Test write access by trying to create a temporary file
                  test_file = os.path.join(output_dir, f".__write_test_{os.getpid()}.tmp")
                  with open(test_file, "w") as f:
                      f.write("test")
-                 os.remove(test_file) # Clean up test file
+                 os.remove(test_file)
              except OSError as e:
                   errors.append(f"- Выходная директория недоступна для записи:\n  '{output_dir}'\n  Ошибка: {e}")
              except Exception as e:
                  errors.append(f"- Ошибка при проверке/создании выходной директории:\n  '{output_dir}'\n  Ошибка: {e}")
 
-             # Check write access for existing output file only if directory check passed
              if not errors and os.path.exists(output_file):
                   if not os.access(output_file, os.W_OK):
                        errors.append(f"- Нет прав на перезапись существующего выходного файла:\n  {output_file}")
@@ -1623,7 +1451,6 @@ class BookRewriterApp:
             messagebox.showerror("Ошибка ввода", "Пожалуйста, исправьте ошибки:\n\n" + "\n".join(errors))
             return
 
-        # --- Gemini Configuration Check (remains the same) ---
         try:
             configure_gemini()
         except ValueError as e:
@@ -1634,7 +1461,6 @@ class BookRewriterApp:
              logger.error(f"Неожиданная ошибка конфигурации Gemini: {e}", exc_info=True)
              return
 
-        # --- Prepare Parameters (Adjusted) ---
         params = {
             'input_file': input_file,
             'output_file': output_file,
@@ -1646,7 +1472,6 @@ class BookRewriterApp:
             'save_interval': self.save_interval_var.get(),
         }
 
-        # --- Clear Log and Start Thread (remains the same) ---
         self.log_area.configure(state=tk.NORMAL)
         self.log_area.delete('1.0', tk.END)
         self.log_area.configure(state=tk.DISABLED)
@@ -1655,17 +1480,16 @@ class BookRewriterApp:
         self.set_ui_state(running=True)
         self.status_label_var.set("Запуск...")
         self.progressbar['value'] = 0
-        self.progressbar['maximum'] = 1 # Set max to 1 initially
-        self.progressbar['mode'] = 'indeterminate' # Use indeterminate during setup/block proposal
+        self.progressbar['maximum'] = 1
+        self.progressbar['mode'] = 'indeterminate'
         self.master.update_idletasks()
 
         logger.info("="*20 + " Запуск новой задачи переписывания " + "="*20)
         log_params = {k:v for k,v in params.items() if k not in ['style', 'goal']}
         try:
-            # Use default handler for potentially non-serializable items if needed
             logger.info(f"Параметры: {json.dumps(log_params, indent=2, ensure_ascii=False, default=str)}")
         except TypeError:
-            logger.info(f"Параметры (fallback): {log_params}") # Fallback if dumps fails
+            logger.info(f"Параметры (fallback): {log_params}")
         logger.info(f"Стиль (начало): {style[:150]}...")
         logger.info(f"Цель (начало): {goal[:150]}...")
 
@@ -1675,12 +1499,8 @@ class BookRewriterApp:
             daemon=True
         )
         self.rewrite_thread.start()
-        # Switch back to determinate after thread starts and block proposal likely finishes quickly
-        # We update the max value properly in update_progress once total_blocks is known
         self.master.after(500, lambda: setattr(self.progressbar, 'mode', 'determinate'))
 
-
-    # --- Thread Wrapper (remains the same) ---
     def run_rewrite_thread_wrapper(self, params):
         start_time = time.time()
         try:
@@ -1690,7 +1510,6 @@ class BookRewriterApp:
             logging.critical(error_message_full, exc_info=True)
             error_message_for_box = f"Произошла непредвиденная критическая ошибка:\n{type(e).__name__}: {e}\n\nПроцесс остановлен. Проверьте лог."
             if self.master.winfo_exists():
-                # Ensure messagebox runs in the main thread
                 self.master.after(0, lambda msg=error_message_for_box: messagebox.showerror(
                     "Критическая ошибка потока", msg
                 ))
@@ -1699,61 +1518,48 @@ class BookRewriterApp:
             duration = end_time - start_time
             logging.info(f"--- Поток переписывания завершил работу за {duration:.2f} сек. ---")
             if self.master.winfo_exists():
-                # Ensure UI update runs in the main thread
                 self.master.after(0, self.on_rewrite_finish)
 
-    # --- Rewrite Finish Handler (remains the same) ---
     def on_rewrite_finish(self):
         if not self.master.winfo_exists():
              logging.info("Переписывание завершено, но окно GUI было закрыто.")
              return
 
-        self.set_ui_state(running=False) # Re-enable UI
+        self.set_ui_state(running=False)
 
-        # Use the latest progress values to determine status
         final_progress = self.progressbar['value']
         max_progress = self.progressbar['maximum']
-        final_status_message = "Статус неопределен." # Default
+        final_status_message = "Статус неопределен."
 
         if self.stop_event.is_set():
              final_status_message = "Остановлено пользователем."
              messagebox.showwarning("Остановлено", "Процесс переписывания был остановлен.")
-        elif max_progress > 0 and final_progress >= max_progress : # Check against max_progress > 0
+        elif max_progress > 0 and final_progress >= max_progress :
              final_status_message = "Завершено успешно!"
              messagebox.showinfo("Завершено", "Переписывание книги успешно завершено!")
-        elif max_progress <= 1 and final_progress == 0 : # Initial state, likely error before progress started
+        elif max_progress <= 1 and final_progress == 0 :
              final_status_message = "Ошибка инициализации или нет блоков."
-             # Check log for critical errors maybe? For now, generic message.
              messagebox.showerror("Ошибка", "Процесс завершился без обработки блоков. Проверьте лог.")
-        else: # Some progress made, but not complete
+        else:
              final_status_message = "Завершено (не полностью)."
              messagebox.showwarning("Завершено с проблемами", "Переписывание завершено, но не все блоки могли быть обработаны.\nПроверьте лог и финальный статус в файле состояния.")
 
         self.status_label_var.set(final_status_message)
-        # Ensure progress bar reflects final state accurately
         if "успешно" in final_status_message.lower() and max_progress > 0:
-             self.progressbar['value'] = max_progress # Fill bar on success
-        # Don't reset progress bar if stopped or finished with issues, leave as is.
-        # else: # Reset progress bar on error/incomplete? Optional.
-        #      self.progressbar['value'] = 0
+             self.progressbar['value'] = max_progress
+        self.rewrite_thread = None
 
-        self.rewrite_thread = None # Clear thread reference
-
-
-    # --- Stop Rewrite Logic (remains the same) ---
     def stop_rewrite(self):
         if self.rewrite_thread and self.rewrite_thread.is_alive():
             logging.warning("Запрос на остановку процесса...")
             self.status_label_var.set("Остановка...")
             self.master.update_idletasks()
             self.stop_event.set()
-            self.stop_button.configure(state=tk.DISABLED) # Disable stop button immediately
+            self.stop_button.configure(state=tk.DISABLED)
         else:
             logging.info("Запрос на остановку, но процесс не запущен или уже завершается.")
-            self.stop_button.configure(state=tk.DISABLED) # Ensure it's disabled
+            self.stop_button.configure(state=tk.DISABLED)
 
-
-    # --- Window Closing Logic (remains the same) ---
     def on_closing(self):
         if self.rewrite_thread and self.rewrite_thread.is_alive():
              if messagebox.askyesno("Подтверждение выхода",
@@ -1761,30 +1567,24 @@ class BookRewriterApp:
                                     "Остановить его и выйти?\n\n"
                                     "Промежуточный результат и состояние будут сохранены (если возможно)."):
                  self.stop_rewrite()
-                 # Give thread a moment to acknowledge stop before destroying window
-                 # This is not foolproof but helps graceful shutdown
                  self.master.after(200, self.master.destroy)
                  logging.info("Окно закрывается, отправлен сигнал остановки процессу.")
-                 # self.master.destroy() # Destroy after delay
              else:
-                 return # Don't close if user cancels
+                 return
         else:
              logging.info("Окно закрывается.")
              self.master.destroy()
 
-
 if __name__ == "__main__":
     log_filename = "book_rewriter_app.log"
     log_level_file = logging.DEBUG
-    log_level_gui = logging.INFO # Keep GUI log less verbose
+    log_level_gui = logging.INFO
 
-    # --- File Logging Setup (remains the same) ---
     try:
-        # UseRotatingFileHandler if available
         file_handler = RotatingFileHandler(log_filename, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8', delay=True)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [%(threadName)s] %(filename)s:%(lineno)d - %(message)s'))
         logger.addHandler(file_handler)
-        logger.setLevel(log_level_file) # Set root logger level
+        logger.setLevel(log_level_file)
         logging.info("\n" + "="*30 + f" Запуск приложения Book Rewriter {time.strftime('%Y-%m-%d %H:%M:%S')} " + "="*30)
     except ImportError:
          logging.warning("Модуль logging.handlers не найден, используется простой FileHandler без ротации.")
@@ -1795,25 +1595,19 @@ if __name__ == "__main__":
              logger.setLevel(log_level_file)
              logging.info("\n" + "="*30 + f" Запуск приложения Book Rewriter {time.strftime('%Y-%m-%d %H:%M:%S')} " + "="*30)
          except Exception as e_log:
-              # Use print as logging might not be working
               print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось настроить логирование в файл: {e_log}")
     except Exception as e_log_setup:
         print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось настроить логирование: {e_log_setup}")
 
-    # --- Tkinter Main Loop ---
     root = tk.Tk()
-
     sv_ttk.set_theme("dark")
-
-
     try:
         app = BookRewriterApp(root)
         root.mainloop()
     except Exception as e_main:
          logging.critical(f"КРИТИЧЕСКАЯ ОШИБКА в главном цикле Tkinter или инициализации GUI: {e_main}", exc_info=True)
-         # Attempt to show error even if GUI failed partially
          try:
-             if tk.Toplevel.winfo_exists(root): # Check if root still exists
+             if tk.Toplevel.winfo_exists(root):
                  messagebox.showerror("Критическая ошибка приложения", f"Произошла критическая ошибка:\n{e_main}\n\nПриложение будет закрыто. См. лог-файл '{log_filename}'.")
          except Exception as e_msgbox:
              print(f"CRITICAL ERROR (cannot show messagebox: {e_msgbox}): {e_main}. See log file '{log_filename}'.")
