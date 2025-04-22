@@ -3,7 +3,6 @@ import os
 import time
 import json
 import logging
-import re
 from dotenv import load_dotenv
 from typing import List, Dict, Optional, Tuple, TypedDict, Sequence
 import tkinter as tk
@@ -105,48 +104,6 @@ def configure_gemini():
 def count_chars(text: str) -> int:
     return len(text) if isinstance(text, str) else 0
 
-def extract_json_from_response(response_text: str) -> Optional[Dict | List]:
-    if not response_text:
-        logging.error("Невозможно извлечь JSON из пустого ответа.")
-        return None
-
-    cleaned_text = response_text.strip()
-    if cleaned_text.startswith("```") and cleaned_text.endswith("```"):
-        cleaned_text = re.sub(r"^```(?:json)?\s*", "", cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
-        cleaned_text = re.sub(r"\s*```$", "", cleaned_text, flags=re.MULTILINE)
-        cleaned_text = cleaned_text.strip()
-
-    try:
-        parsed_json = json.loads(cleaned_text)
-        logging.debug("JSON успешно распарсен после очистки.")
-        return parsed_json
-    except json.JSONDecodeError as e:
-        logging.warning(f"Парсинг JSON после очистки не удался: {e}. Попытка поиска внутри...")
-        logging.debug(f"Очищенный текст (начало): {cleaned_text[:500]}...")
-
-    json_match = re.search(r'(\{.*\}|\[.*\])', cleaned_text, re.DOTALL)
-
-    if json_match:
-        json_str = json_match.group(0).strip()
-        logging.debug("Найден JSON-подобный блок с использованием regex.")
-        try:
-            parsed_json = json.loads(json_str)
-            logging.info("JSON успешно извлечен и распарсен изнутри текста ответа.")
-            return parsed_json
-        except json.JSONDecodeError as e_inner:
-             try:
-                 decoder = json.JSONDecoder()
-                 parsed_json, _ = decoder.raw_decode(json_str)
-                 logging.info("JSON успешно извлечен и распарсен (raw_decode).")
-                 return parsed_json
-             except json.JSONDecodeError as e_raw:
-                 logging.error(f"Не удалось декодировать извлеченную строку JSON (ни loads, ни raw_decode): {e_inner} / {e_raw}")
-                 logging.error(f"Невалидная извлеченная строка JSON (начало): {json_str[:500]}...")
-                 return None
-    else:
-        logging.error("Не удалось найти JSON-структуры (массив или объект) в ответе с помощью regex.")
-        logging.debug(f"Полный ответ (начало): {response_text[:500]}...")
-        return None
 
 def check_api_response_safety_and_finish(response: genai.types.GenerateContentResponse, context_msg: str) -> Tuple[Optional[str], Optional[str], bool]:
     extracted_text: Optional[str] = None
