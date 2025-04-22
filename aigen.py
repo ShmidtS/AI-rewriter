@@ -14,13 +14,12 @@ from logging.handlers import RotatingFileHandler
 import sv_ttk
 import re
 import string
+from google.generativeai.types import GenerationConfig, HarmCategory, HarmBlockThreshold
 
-# Глобальные переменные
 log_queue = queue.Queue()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
 
-# Загрузка API-ключа
 try:
     load_dotenv()
     GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -30,7 +29,6 @@ except Exception as e:
     logger.error(f"Ошибка загрузки .env: {e}")
     GEMINI_API_KEY = None
 
-# Константы
 AVAILABLE_MODELS = [
     "gemini-2.0-pro-exp", "gemini-2.0-flash-exp",
     "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-flash-001-tuning", "gemini-1.5-flash-002", 
@@ -39,7 +37,7 @@ AVAILABLE_MODELS = [
     "gemini-2.0-flash-thinking-exp-01-21", "gemini-2.0-flash-thinking-exp", "gemini-2.0-flash-thinking-exp-1219", 
     "learnlm-2.0-flash-experimental"
 ]
-REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp"
+REWRITER_MODEL_DEFAULT = "learnlm-2.0-flash-experimental"
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
 BLOCK_TARGET_CHARS = 9000
@@ -54,12 +52,7 @@ SPLIT_PRIORITY = ['. ', '! ', '? ']
 MAX_RETRIES = 50
 RETRY_DELAY_SECONDS = 3
 
-SAFETY_SETTINGS = {
-    'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
-    'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
-    'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
-    'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
-}
+
 GENERATION_CONFIG = genai.types.GenerationConfig(
     temperature=0.3, top_p=0.95, max_output_tokens=OUTPUT_TOKEN_LIMIT
 )
@@ -68,7 +61,52 @@ STATE_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
 FINAL_SUFFIX = "_final_rewritten.txt"
 
-# Типы данных
+
+SYSTEM_INSTRUCTION_BASE = """**System Prompt v2.4 - Book Rewriter Agent**
+
+**I. Core Directive**
+
+You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a specific segment of text provided within a larger context, strictly adhering to the parameters and constraints given in each request. You operate as a component within a larger automated workflow that processes text in blocks. Your output must be precise, conformant, and directly usable by this workflow.
+
+**II. Task Definition**
+
+1.  **Identify Target Segment:** The input text will contain a segment clearly marked by  `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers.
+2.  **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include this context in your output.**
+3.  **Rewrite Parameters:** You will be given specific parameters for each rewriting task:
+    *   **Language:** The target language for the rewritten text (e.g., "Русский", "English").
+    *   **Style:** A description of the desired writing style (e.g., "Formal academic", "Engaging narrative", "Simple and direct").
+    *   **Goal:** The specific objective of the rewrite (e.g., "Improve clarity", "Simplify vocabulary", "Adapt for a younger audience", "Increase detail").
+    *   **Approximate Target Length:** A suggested character length range for the rewritten segment (e.g., "~{min_len}-{max_len} characters"). This is a guideline; prioritize quality and constraints over exact length adherence if necessary, but stay reasonably within the bounds.
+
+**III. Strict Operational Constraints & Instructions**
+
+1.  **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`.
+2.  **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
+3.  **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
+4.  **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
+5.  **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range. Significant deviation should only occur if strictly necessary to meet other constraints (like Style or Goal).
+6.  **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
+7.  **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. Pay close attention to the boundaries.
+8.  **Output Format:**
+    *   Generate *only* the rewritten text corresponding to the segment between the markers.
+    *   **Do NOT include the `{START_MARKER}` or `{END_MARKER}` in your output.**
+    *   **Do NOT include any of the surrounding context in your output.**
+    *   **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text.
+
+
+**IV. Execution Logic**
+
+1.  Parse the `Parameters` and `Instructions`.
+2.  Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
+3.  Note the immediate contextual sentences before `{START_MARKER}` and after `{END_MARKER}`.
+4.  Perform the rewrite according to all parameters and constraints (especially III.6 and III.7).
+5.  Output *only* the resulting rewritten string.
+
+**V. Final Output Requirement**
+
+Produce a single block of text representing the rewritten segment, conforming to all specified constraints, suitable for direct programmatic use.
+"""
+
 class BlockInfo(TypedDict):
     block_index: int
     start_char_index: int
@@ -77,7 +115,6 @@ class BlockInfo(TypedDict):
     processed: bool
     failed_attempts: int
 
-# Обработчик логов для GUI
 class QueueHandler(logging.Handler):
     def __init__(self, log_queue):
         super().__init__()
@@ -86,7 +123,6 @@ class QueueHandler(logging.Handler):
     def emit(self, record):
         self.log_queue.put(self.format(record))
 
-# Конфигурация Gemini API
 def configure_gemini():
     if not GEMINI_API_KEY:
         raise ValueError("API-ключ Gemini не установлен.")
@@ -98,7 +134,6 @@ def configure_gemini():
         logger.error(f"Ошибка конфигурации Gemini API: {e}")
         raise ValueError(f"Ошибка конфигурации: {e}")
 
-# Получение доступных моделей
 def list_available_models():
     try:
         models = [m.name.split('/')[-1] for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -108,7 +143,7 @@ def list_available_models():
         logger.error(f"Ошибка получения моделей: {e}")
         return AVAILABLE_MODELS
 
-# Подсчет символов
+
 def count_chars(text: str) -> int:
     return len(text) if isinstance(text, str) else 0
 
@@ -128,7 +163,6 @@ def normalize_sentence(sentence: str) -> str:
     sentence = sentence.rstrip(string.punctuation)
     return sentence
 
-# Проверка ответа API
 def check_api_response(response: genai.types.GenerateContentResponse, context: str) -> Tuple[Optional[str], Optional[str], bool]:
     text, error, max_tokens = None, None, False
 
@@ -176,7 +210,6 @@ def check_api_response(response: genai.types.GenerateContentResponse, context: s
         logger.error(error)
         return None, error, False
 
-# Поиск точки разделения текста
 def find_split_point(text: str, start: int, target_end: int, min_len: int, max_len: int) -> int:
     text_len = len(text)
     ideal_end = min(text_len, max(start + min_len, min(target_end, start + max_len)))
@@ -216,9 +249,8 @@ def find_split_point(text: str, start: int, target_end: int, min_len: int, max_l
 
     return min(ideal_end, start + max_len)
 
-# Разбиение текста на блоки
+
 def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
-    logger.info("Разбиение текста на блоки...")
     text_len = count_chars(text)
     if not text_len:
         logger.warning("Текст пуст.")
@@ -252,54 +284,10 @@ def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
     logger.info(f"Создано {len(blocks)} блоков.")
     return blocks
 
-# Формирование промпта для переписывания
 def create_rewrite_prompt(language: str, style: str, goal: str, text_with_markers: str, original_len: int) -> str:
     min_len = int(original_len * MIN_REWRITE_LENGTH_RATIO)
     max_len = int(original_len * MAX_REWRITE_LENGTH_RATIO)
-    return f"""**System Prompt v2.4 - Book Rewriter Agent**
-
-**I. Core Directive**
-
-You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a specific segment of text provided within a larger context, strictly adhering to the parameters and constraints given in each request. You operate as a component within a larger automated workflow that processes text in blocks. Your output must be precise, conformant, and directly usable by this workflow.
-
-**II. Task Definition**
-
-1.  **Identify Target Segment:** The input text will contain a segment clearly marked by  `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers.
-2.  **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include this context in your output.**
-3.  **Rewrite Parameters:** You will be given specific parameters for each rewriting task:
-    *   **Language:** The target language for the rewritten text (e.g., "Русский", "English").
-    *   **Style:** A description of the desired writing style (e.g., "Formal academic", "Engaging narrative", "Simple and direct").
-    *   **Goal:** The specific objective of the rewrite (e.g., "Improve clarity", "Simplify vocabulary", "Adapt for a younger audience", "Increase detail").
-    *   **Approximate Target Length:** A suggested character length range for the rewritten segment (e.g., "~{min_len}-{max_len} characters"). This is a guideline; prioritize quality and constraints over exact length adherence if necessary, but stay reasonably within the bounds.
-
-**III. Strict Operational Constraints & Instructions**
-
-1.  **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`.
-2.  **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
-3.  **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
-4.  **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
-5.  **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range. Significant deviation should only occur if strictly necessary to meet other constraints (like Style or Goal).
-6.  **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
-7.  **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. Pay close attention to the boundaries.
-8.  **Output Format:**
-    *   Generate *only* the rewritten text corresponding to the segment between the markers.
-    *   **Do NOT include the `{START_MARKER}` or `{END_MARKER}` in your output.**
-    *   **Do NOT include any of the surrounding context in your output.**
-    *   **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text.
-
-
-**IV. Execution Logic**
-
-1.  Parse the `Parameters` and `Instructions`.
-2.  Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
-3.  Note the immediate contextual sentences before `{START_MARKER}` and after `{END_MARKER}`.
-4.  Perform the rewrite according to all parameters and constraints (especially III.6 and III.7).
-5.  Output *only* the resulting rewritten string.
-
-**V. Final Output Requirement**
-
-Produce a single block of text representing the rewritten segment, conforming to all specified constraints, suitable for direct programmatic use.
-
+    return f"""
 Now start:
 
 Language: {language}
@@ -356,24 +344,49 @@ def validate_rewritten_text(text: str, original: str, orig_len: int, prev_block:
 
     return True, None
 
-# Вызов API для переписывания
-def call_gemini_rewrite_api(prompt: str, model_name: str, orig_len: int, original: str, prev_block: str, next_block: str) -> Optional[str]:
+def call_gemini_rewrite_api(
+    system_instruction: str,
+    user_content: str,
+    model_name: str,
+    orig_len: int,
+    original: str,
+    prev_block: str,
+    next_block: str
+) -> Optional[str]:
     try:
-        model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel(
+            model_name,
+            system_instruction=system_instruction
+        )
+        logger.info(f"Инициализирована модель '{model_name}' с системной инструкцией.")
     except Exception as e:
         logger.error(f"Ошибка инициализации модели '{model_name}': {e}")
         return None
+
+    generation_config = GenerationConfig(
+        temperature=0.3, top_p=0.95, max_output_tokens=OUTPUT_TOKEN_LIMIT
+    )
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
 
     for attempt in range(MAX_RETRIES):
         context = f"Попытка {attempt + 1}/{MAX_RETRIES}"
         logger.info(f"Вызов API: {context}")
         try:
-            response = model.generate_content(prompt, safety_settings=SAFETY_SETTINGS, generation_config=GENERATION_CONFIG)
+            response = model.generate_content(
+                contents= [{'role': 'user', 'parts': [{'text': user_content}]}],
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
             text, error, max_tokens = check_api_response(response, context)
             if text is None:
                 logger.error(f"{context}: Ошибка API: {error}")
             else:
-                is_valid, validation_error = validate_rewritten_text(text, original, orig_len, prev_block, next_block, context)
+                is_valid, validation_error = validate_rewritten_text(text, original, orig_len, prev_block, next_block, context) # Ваша функция валидации
                 if is_valid:
                     logger.info(f"{context}: Успешно переписан блок ({count_chars(text)} симв.).")
                     return text
@@ -382,10 +395,10 @@ def call_gemini_rewrite_api(prompt: str, model_name: str, orig_len: int, origina
             logger.error(f"{context}: Ошибка вызова API: {e}")
         if attempt < MAX_RETRIES - 1:
             time.sleep(RETRY_DELAY_SECONDS)
+
     logger.error("Исчерпаны попытки переписывания.")
     return None
 
-# Сохранение состояния
 def save_state(filename: str, data: Dict):
     temp_file = filename + ".tmp"
     try:
@@ -397,7 +410,6 @@ def save_state(filename: str, data: Dict):
     except Exception as e:
         logger.error(f"Ошибка сохранения состояния: {e}")
 
-# Загрузка состояния
 def load_state(filename: str) -> Optional[Dict]:
     if os.path.exists(filename):
         try:
@@ -410,7 +422,7 @@ def load_state(filename: str) -> Optional[Dict]:
             logger.warning(f"Ошибка загрузки состояния: {e}")
     return None
 
-# Сохранение промежуточного файла
+
 def save_intermediate(filename: str, content: str, context: str = ""):
     temp_file = filename + ".tmp"
     try:
@@ -421,14 +433,14 @@ def save_intermediate(filename: str, content: str, context: str = ""):
     except Exception as e:
         logger.warning(f"{context}: Ошибка сохранения: {e}")
 
-# Основной процесс переписывания
+
 def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     input_file = params['input_file']
     output_file = params['output_file']
     language = params['language']
     style = params['style']
     goal = params['goal']
-    model = params['rewriter_model']
+    model_name = params['rewriter_model']
     resume = params['resume']
     save_interval = params['save_interval']
 
@@ -438,94 +450,212 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     intermediate_file = os.path.join(output_dir, base_name + INTERMEDIATE_SUFFIX)
 
     logger.info(f"Начало переписывания: {input_file} -> {output_file}")
-    logger.info(f"Язык: {language}, Модель: {model}")
+    logger.info(f"Язык: {language}, Стиль: {style[:50]}..., Цель: {goal[:50]}..., Модель: {model_name}")
+    logger.info(f"Возобновление: {resume}, Интервал сохранения: {save_interval}")
 
     try:
         with open(input_file, 'r', encoding='utf-8') as f:
             original_text = f.read()
-        if not original_text:
-            logger.error("Входной файл пуст.")
+        if not original_text.strip():
+            logger.error("Входной файл пуст или содержит только пробельные символы.")
+            if progress_callback: 
+                progress_callback(0, 1)
             return
+    except FileNotFoundError:
+         logger.error(f"Входной файл не найден: {input_file}")
+         if progress_callback: 
+             progress_callback(0, 1)
+         return
     except Exception as e:
-        logger.error(f"Ошибка чтения файла: {e}")
+        logger.error(f"Ошибка чтения входного файла {input_file}: {e}", exc_info=True)
+        if progress_callback: 
+            progress_callback(0, 1)
         return
 
-    blocks, processed_idx, rewritten_text = [], -1, None
-    if resume and (state := load_state(state_file)):
-        blocks = state['original_blocks_data']
-        processed_idx = state['processed_block_index']
-        with open(intermediate_file, 'r', encoding='utf-8') as f:
-            rewritten_text = f.read()
-        logger.info(f"Возобновление с блока {processed_idx + 2}")
-    else:
+    original_text_len = count_chars(original_text)
+    logger.info(f"Длина исходного текста: {original_text_len} символов.")
+
+    blocks: Optional[List[BlockInfo]] = None
+    processed_idx = -1
+    rewritten_text: Optional[str] = None
+    state_loaded = False
+
+    if resume:
+        state = load_state(state_file)
+        if state and 'original_blocks_data' in state:
+            try:
+                with open(intermediate_file, 'r', encoding='utf-8') as f:
+                    rewritten_text = f.read()
+                blocks = state['original_blocks_data']
+                processed_idx = state.get('processed_block_index', -1)
+                state_loaded = True
+                logger.info(f"Состояние и промежуточный текст ({count_chars(rewritten_text)} симв.) загружены. Возобновление с блока {processed_idx + 2}.")
+            except FileNotFoundError:
+                logger.warning(f"Файл состояния найден, но промежуточный файл {intermediate_file} отсутствует. Начинаем заново.")
+            except Exception as e:
+                logger.warning(f"Ошибка чтения промежуточного файла {intermediate_file}: {e}. Начинаем заново.")
+
+    if not state_loaded:
+        logger.info("Инициализация нового процесса или перезапуск после ошибки загрузки.")
         rewritten_text = original_text
         blocks = split_into_blocks(original_text, BLOCK_TARGET_CHARS)
-        save_intermediate(intermediate_file, rewritten_text, "Инициализация")
-        save_state(state_file, {
-            'processed_block_index': -1,
-            'original_blocks_data': blocks,
-            'total_blocks': len(blocks),
-            'timestamp': time.time()
-        })
+        if blocks:
+            save_intermediate(intermediate_file, rewritten_text, "Инициализация")
+            save_state(state_file, {
+                'processed_block_index': -1,
+                'original_blocks_data': blocks,
+                'total_blocks': len(blocks),
+                'timestamp': time.time()
+            })
+            processed_idx = -1
+        else:
+            logger.error("Не удалось разбить текст на блоки при инициализации.")
+            if progress_callback: 
+                progress_callback(0, 1)
+            return
 
-    if not blocks:
-        logger.error("Не удалось разбить текст на блоки.")
+    if not blocks or rewritten_text is None:
+        logger.error("Критическая ошибка: отсутствуют блоки или текст для обработки.")
+        if progress_callback: 
+            progress_callback(0, 1)
         return
 
     total_blocks = len(blocks)
+    logger.info(f"Всего блоков для обработки: {total_blocks}")
     if progress_callback:
         progress_callback(processed_idx + 1, total_blocks)
 
+    current_system_instruction = SYSTEM_INSTRUCTION_BASE
+
     for i in range(total_blocks):
         if stop_event and stop_event.is_set():
-            logger.warning("Процесс остановлен.")
+            logger.warning("Процесс остановлен пользователем.")
             break
 
-        block = blocks[i]
-        if i <= processed_idx or block['processed']:
+        try:
+            block = blocks[i]
+        except IndexError:
+            logger.error(f"Ошибка: Попытка доступа к блоку с индексом {i}, но всего блоков {total_blocks}.")
+            break
+
+        if i <= processed_idx:
+            logger.debug(f"Блок {i+1}/{total_blocks} уже обработан, пропуск.")
             continue
-        if block['failed_attempts'] >= MAX_RETRIES:
-            logger.warning(f"Блок {i+1} пропущен: превышен лимит попыток.")
+        if block.get('processed', False):
+            logger.debug(f"Блок {i+1}/{total_blocks} помечен как обработанный, пропуск.")
+            continue
+        if block.get('failed_attempts', 0) >= MAX_RETRIES:
+            logger.warning(f"Блок {i+1}/{total_blocks} пропущен: превышен лимит ({MAX_RETRIES}) неудачных попыток.")
             continue
 
-        start, end = block['start_char_index'], block['end_char_index']
-        logger.info(f"Обработка блока {i+1}/{total_blocks} [{start}:{end}]")
+        start = block['start_char_index']
+        end = block['end_char_index']
+        current_rewritten_text_len = count_chars(rewritten_text)
+
+        if not (0 <= start <= end <= current_rewritten_text_len):
+             logger.error(f"Ошибка: Некорректные границы для блока {i+1}: start={start}, end={end}, text_len={current_rewritten_text_len}. Прерывание.")
+             save_state(state_file, {
+                 'processed_block_index': processed_idx,
+                 'original_blocks_data': blocks,
+                 'total_blocks': total_blocks,
+                 'timestamp': time.time()
+             })
+             break
+
+        logger.info(f"Обработка блока {i+1}/{total_blocks} [{start}:{end}] (Длина: {end-start} симв.)")
 
         block_text = rewritten_text[start:end]
-        prev_block = rewritten_text[blocks[i-1]['start_char_index']:blocks[i-1]['end_char_index']] if i > 0 else ""
-        next_block = rewritten_text[blocks[i+1]['start_char_index']:blocks[i+1]['end_char_index']] if i < total_blocks - 1 else ""
+        original_block_length = block.get('original_char_length', len(block_text))
 
-        prompt = create_rewrite_prompt(language, style, goal, f"{rewritten_text[:start]}{START_MARKER}{block_text}{END_MARKER}{rewritten_text[end:]}", len(block_text))
-        new_text = call_gemini_rewrite_api(prompt, model, len(block_text), block_text, prev_block, next_block)
+        prev_block_text = ""
+        if i > 0:
+            prev_block_info = blocks[i-1]
+            prev_start = prev_block_info['start_char_index']
+            prev_end = prev_block_info['end_char_index']
+            if 0 <= prev_start <= prev_end <= current_rewritten_text_len:
+                 prev_block_text = rewritten_text[prev_start:prev_end]
+            else:
+                 logger.warning(f"Некорректные границы для предыдущего блока {i}, используем пустой контекст.")
 
-        if new_text:
-            delta = len(new_text) - len(block_text)
+        next_block_text = ""
+        if i < total_blocks - 1:
+            next_block_info = blocks[i+1]
+            next_start = next_block_info['start_char_index']
+            next_end = next_block_info['end_char_index']
+            safe_next_end = min(next_end, current_rewritten_text_len)
+            if 0 <= next_start <= safe_next_end <= current_rewritten_text_len:
+                 next_block_text = rewritten_text[next_start:safe_next_end]
+            else:
+                 logger.warning(f"Некорректные границы для следующего блока {i+2}, используем пустой контекст.")
+
+
+        min_len = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
+        max_len = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
+        user_input_content = f"""Language: {language}
+Style: {style}
+Goal: {goal}
+Approximate Target Length: ~{min_len}-{max_len} characters.
+
+Instructions specific for this block (if any):
+Rewrite ONLY the marked segment below following the system instructions provided. Ensure the rewritten text is substantially different from the original and does not repeat full sentences from the surrounding context.
+
+Text:
+{rewritten_text[:start]}{START_MARKER}{block_text}{END_MARKER}{rewritten_text[end:]}
+"""
+        new_text = call_gemini_rewrite_api(
+            system_instruction=current_system_instruction,
+            user_content=user_input_content,
+            model_name=model_name,
+            orig_len=original_block_length,
+            original=block_text,
+            prev_block=prev_block_text,
+            next_block=next_block_text
+        )
+
+        if new_text is not None:
+            new_text_len = count_chars(new_text)
+            delta = new_text_len - len(block_text)
+            logger.info(f"Блок {i+1} успешно переписан. Изменение длины: {delta} симв.")
+
             rewritten_text = rewritten_text[:start] + new_text + rewritten_text[end:]
-            block['end_char_index'] = start + len(new_text)
+
+            block['end_char_index'] = start + new_text_len
             block['processed'] = True
             block['failed_attempts'] = 0
             processed_idx = i
+
             save_intermediate(intermediate_file, rewritten_text, f"Блок {i+1}")
-            for j in range(i + 1, total_blocks):
-                blocks[j]['start_char_index'] += delta
-                blocks[j]['end_char_index'] += delta
+
+            if delta != 0:
+                logger.debug(f"Сдвигаем границы последующих блоков на {delta}...")
+                for j in range(i + 1, total_blocks):
+                    blocks[j]['start_char_index'] += delta
+                    blocks[j]['end_char_index'] += delta
+                logger.debug("Сдвиг границ завершен.")
+
         else:
             block['failed_attempts'] += 1
-            logger.error(f"Блок {i+1} не переписан.")
+            logger.error(f"Блок {i+1} не был переписан после {block['failed_attempts']} попыток.")
 
         if progress_callback:
             progress_callback(i + 1, total_blocks)
 
-        if save_interval and (i + 1) % save_interval == 0:
-            save_state(state_file, {
-                'processed_block_index': processed_idx,
-                'original_blocks_data': blocks,
-                'total_blocks': total_blocks,
-                'timestamp': time.time()
-            })
+        if save_interval and ((new_text is not None and (i + 1) % save_interval == 0) or block['failed_attempts'] >= MAX_RETRIES):
+             logger.info(f"Сохранение состояния на блоке {i+1}...")
+             save_state(state_file, {
+                 'processed_block_index': processed_idx,
+                 'original_blocks_data': blocks,
+                 'total_blocks': total_blocks,
+                 'timestamp': time.time()
+             })
 
-    logger.info(f"Переписывание завершено. Обработано: {sum(1 for b in blocks if b['processed'])}/{total_blocks}")
+    processed_count = sum(1 for b in blocks if b.get('processed', False))
+    failed_count = sum(1 for b in blocks if b.get('failed_attempts', 0) >= MAX_RETRIES and not b.get('processed', False))
+    logger.info(f"Переписывание завершено. Обработано: {processed_count}/{total_blocks}. Пропущено из-за ошибок: {failed_count}.")
+
     save_intermediate(output_file, rewritten_text, "Финал")
+
+    logger.info("Сохранение финального состояния...")
     save_state(state_file, {
         'processed_block_index': processed_idx,
         'original_blocks_data': blocks,
@@ -533,7 +663,13 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         'timestamp': time.time()
     })
 
-# GUI-приложение
+    logger.info(f"Финальный результат сохранен в: {output_file}")
+    logger.info(f"Финальное состояние сохранено в: {state_file}")
+
+    if progress_callback:
+        progress_callback(processed_count, total_blocks)
+
+
 class BookRewriterApp:
     def __init__(self, master):
         self.master = master
