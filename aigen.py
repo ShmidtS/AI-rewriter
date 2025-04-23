@@ -16,6 +16,7 @@ import re
 import string
 from google.generativeai.types import GenerationConfig, HarmCategory, HarmBlockThreshold
 
+# --- Конфигурация и константы (без изменений) ---
 log_queue = queue.Queue()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
@@ -31,38 +32,39 @@ except Exception as e:
 
 AVAILABLE_MODELS = [
     "gemini-2.0-pro-exp", "gemini-2.0-flash-exp",
-    "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-flash-001-tuning", "gemini-1.5-flash-002", 
-    "gemini-2.5-pro-exp-03-25", 
-    "gemini-2.0-pro-exp-02-05", 
-    "gemini-2.0-flash-thinking-exp-01-21", "gemini-2.0-flash-thinking-exp", "gemini-2.0-flash-thinking-exp-1219", 
+    "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-flash-001-tuning", "gemini-1.5-flash-002",
+    "gemini-2.5-pro-exp-03-25",
+    "gemini-2.0-pro-exp-02-05",
+    "gemini-2.0-flash-thinking-exp-01-21", "gemini-2.0-flash-thinking-exp", "gemini-2.0-flash-thinking-exp-1219",
     "learnlm-2.0-flash-experimental"
 ]
-REWRITER_MODEL_DEFAULT = "learnlm-2.0-flash-experimental"
+REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp"
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
-BLOCK_TARGET_CHARS = 9000
-MIN_REWRITE_LENGTH_RATIO = 0.50
-MAX_REWRITE_LENGTH_RATIO = 1.8
+BLOCK_TARGET_CHARS = 17000
+MIN_REWRITE_LENGTH_RATIO = 0.60
+MAX_REWRITE_LENGTH_RATIO = 1.6
 SIMILARITY_THRESHOLD = 0.95
-OUTPUT_TOKEN_LIMIT = 4096
+OUTPUT_TOKEN_LIMIT = 5116
 MIN_BLOCK_LEN_FACTOR = 0.5
 MAX_BLOCK_LEN_FACTOR = 1.5
 SEARCH_RADIUS_FACTOR = 0.1
 SPLIT_PRIORITY = ['. ', '! ', '? ']
 MAX_RETRIES = 50
-RETRY_DELAY_SECONDS = 3
-
+RETRY_DELAY_SECONDS = 1
 
 GENERATION_CONFIG = genai.types.GenerationConfig(
-    temperature=0.3, top_p=0.95, max_output_tokens=OUTPUT_TOKEN_LIMIT
+    temperature=0.5, top_p=0.90, max_output_tokens=OUTPUT_TOKEN_LIMIT
 )
 
 STATE_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
 FINAL_SUFFIX = "_final_rewritten.txt"
 
+SYSTEM_INSTRUCTION_BASE = """
+---
 
-SYSTEM_INSTRUCTION_BASE = """**System Prompt v2.4 - Book Rewriter Agent**
+### System Prompt v2.5 – Book Rewriter Agent
 
 **I. Core Directive**
 
@@ -70,41 +72,57 @@ You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a
 
 **II. Task Definition**
 
-1.  **Identify Target Segment:** The input text will contain a segment clearly marked by  `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers.
-2.  **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include this context in your output.**
-3.  **Rewrite Parameters:** You will be given specific parameters for each rewriting task:
-    *   **Language:** The target language for the rewritten text (e.g., "Русский", "English").
-    *   **Style:** A description of the desired writing style (e.g., "Formal academic", "Engaging narrative", "Simple and direct").
-    *   **Goal:** The specific objective of the rewrite (e.g., "Improve clarity", "Simplify vocabulary", "Adapt for a younger audience", "Increase detail").
-    *   **Approximate Target Length:** A suggested character length range for the rewritten segment (e.g., "~{min_len}-{max_len} characters"). This is a guideline; prioritize quality and constraints over exact length adherence if necessary, but stay reasonably within the bounds.
+1. **Identify Target Segment:** The input text will contain a segment clearly marked by `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers.
+
+2. **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include this context in your output.**
+
+3. **Rewrite Parameters:** You will be given specific parameters for each rewriting task:
+
+   - **Language:** The target language for the rewritten text (e.g., "Русский", "English").
+   - **Style:** A description of the desired writing style (e.g., "Formal academic", "Engaging narrative", "Simple and direct").
+   - **Goal:** The specific objective of the rewrite (e.g., "Improve clarity", "Simplify vocabulary", "Adapt for a younger audience", "Increase detail").
+   - **Approximate Target Length:** A suggested character length range for the rewritten segment (e.g., "~{min_len}-{max_len} characters").
 
 **III. Strict Operational Constraints & Instructions**
 
-1.  **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`.
-2.  **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
-3.  **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
-4.  **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
-5.  **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range. Significant deviation should only occur if strictly necessary to meet other constraints (like Style or Goal).
-6.  **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
-7.  **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. Pay close attention to the boundaries.
-8.  **Output Format:**
-    *   Generate *only* the rewritten text corresponding to the segment between the markers.
-    *   **Do NOT include the `{START_MARKER}` or `{END_MARKER}` in your output.**
-    *   **Do NOT include any of the surrounding context in your output.**
-    *   **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text.
+1. **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`.
 
+2. **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
+
+3. **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
+
+4. **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
+
+5. **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range.
+
+6. **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
+
+7. **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. Pay close attention to the boundaries.
+
+8. **Output Format:**
+
+   - Generate *only* the rewritten text corresponding to the segment between the markers.
+   - **Do NOT include the `{START_MARKER}` or `{END_MARKER}` in your output.**
+   - **Do NOT include any of the surrounding context in your output.**
+   - **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text.
 
 **IV. Execution Logic**
 
-1.  Parse the `Parameters` and `Instructions`.
-2.  Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
-3.  Note the immediate contextual sentences before `{START_MARKER}` and after `{END_MARKER}`.
-4.  Perform the rewrite according to all parameters and constraints (especially III.6 and III.7).
-5.  Output *only* the resulting rewritten string.
+1. Parse the `Parameters` and `Instructions`.
+
+2. Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
+
+3. Note the immediate contextual sentences before `{START_MARKER}` and after `{END_MARKER}`.
+
+4. Perform the rewrite according to all parameters and constraints (especially III.6 and III.7).
+
+5. Output *only* the resulting rewritten string.
 
 **V. Final Output Requirement**
 
 Produce a single block of text representing the rewritten segment, conforming to all specified constraints, suitable for direct programmatic use.
+
+---
 """
 
 class BlockInfo(TypedDict):
@@ -152,7 +170,7 @@ def split_into_sentences(text: str) -> List[str]:
     sentences = re.split(r'(?<=[.!?])\s+', text)
     return [s.strip() for s in sentences if s.strip()]
 
-def has_more_than_n_words(sentence: str, n: int = 5) -> bool:
+def has_more_than_n_words(sentence: str, n: int = 10) -> bool:
     """Проверяет, содержит ли предложение больше n слов."""
     words = sentence.split()
     return len(words) > n
@@ -312,37 +330,59 @@ Text:
 {text_with_markers}
 """
 
+# --- Измененная функция ---
 def validate_rewritten_text(text: str, original: str, orig_len: int, prev_block: str, next_block: str, context: str) -> Tuple[bool, Optional[str]]:
+    """
+    Валидирует переписанный текст.
+    Маркеры START_MARKER и END_MARKER удаляются из 'text' перед проверкой контента.
+    """
+    # Проверяем, не пустой ли текст при непустом оригинале (до удаления маркеров)
     if not text.strip() and original.strip():
         return False, f"{context}: Пустой текст при непустом оригинале."
-    if START_MARKER in text or END_MARKER in text:
-        return False, f"{context}: Содержит маркеры."
-    if original.strip() and text.strip() and original != text:
-        similarity = difflib.SequenceMatcher(None, original, text).ratio()
-        if similarity >= SIMILARITY_THRESHOLD:
-            return False, f"{context}: Слишком похож на оригинал ({similarity:.2f})."
-    if orig_len > 0:
-        text_len = count_chars(text)
-        min_len = orig_len * MIN_REWRITE_LENGTH_RATIO
-        max_len = orig_len * MAX_REWRITE_LENGTH_RATIO + 10
-        if text_len > max_len:
-            return False, f"{context}: Слишком длинный ({text_len} > {max_len})."
-        if text_len < min_len and orig_len > 20:
-            return False, f"{context}: Слишком короткий ({text_len} < {min_len})."
 
-    rewritten_sentences = [normalize_sentence(s) for s in split_into_sentences(text)]
+    # Удаляем маркеры из текста *перед* дальнейшими проверками контента [1, 2, 3, 4, 5]
+    text_cleaned = text.replace(START_MARKER, "").replace(END_MARKER, "")
+
+    # --- Проверки выполняются на ОЧИЩЕННОМ тексте ('text_cleaned') ---
+
+    # Проверка на схожесть с оригиналом
+    if original.strip() and text_cleaned.strip() and original != text_cleaned:
+        similarity = difflib.SequenceMatcher(None, original, text_cleaned).ratio()
+        if similarity >= SIMILARITY_THRESHOLD:
+            return False, f"{context}: Слишком похож на оригинал ({similarity:.2f}) после очистки маркеров."
+
+    # Проверка длины
+    if orig_len > 0:
+        text_len_cleaned = count_chars(text_cleaned)
+        min_len = orig_len * MIN_REWRITE_LENGTH_RATIO
+        max_len = orig_len * MAX_REWRITE_LENGTH_RATIO
+        if text_len_cleaned > max_len:
+            return False, f"{context}: Слишком длинный ({text_len_cleaned} > {int(max_len)}) после очистки маркеров."
+        # Проверяем на слишком короткий текст, только если оригинал не был совсем коротким
+        if text_len_cleaned < min_len and orig_len > 20:
+            return False, f"{context}: Слишком короткий ({text_len_cleaned} < {int(min_len)}) после очистки маркеров."
+
+    # Проверка на повторение предложений из контекста
+    rewritten_sentences = [normalize_sentence(s) for s in split_into_sentences(text_cleaned)] # Используем очищенный текст
 
     if prev_block:
         prev_sentences = set(normalize_sentence(s) for s in split_into_sentences(prev_block) if has_more_than_n_words(s))
-        if any(sent in prev_sentences for sent in rewritten_sentences):
-            return False, f"{context}: Содержит предложение из предыдущего блока."
+        repeated_prev = [sent for sent in rewritten_sentences if sent in prev_sentences]
+        if repeated_prev:
+            logger.debug(f"Повтор предложений из предыдущего блока: {repeated_prev}")
+            return False, f"{context}: Содержит предложение(я) из предыдущего блока."
 
     if next_block:
         next_sentences = set(normalize_sentence(s) for s in split_into_sentences(next_block) if has_more_than_n_words(s))
-        if any(sent in next_sentences for sent in rewritten_sentences):
-            return False, f"{context}: Содержит предложение из следующего блока."
+        repeated_next = [sent for sent in rewritten_sentences if sent in next_sentences]
+        if repeated_next:
+            logger.debug(f"Повтор предложений из следующего блока: {repeated_next}")
+            return False, f"{context}: Содержит предложение(я) из следующего блока."
 
+    # Если все проверки пройдены
     return True, None
+# --- Конец измененной функции ---
+
 
 def call_gemini_rewrite_api(
     system_instruction: str,
@@ -386,10 +426,15 @@ def call_gemini_rewrite_api(
             if text is None:
                 logger.error(f"{context}: Ошибка API: {error}")
             else:
-                is_valid, validation_error = validate_rewritten_text(text, original, orig_len, prev_block, next_block, context) # Ваша функция валидации
+                # Валидация теперь происходит с учетом удаления маркеров внутри validate_rewritten_text
+                is_valid, validation_error = validate_rewritten_text(
+                    text, original, orig_len, prev_block, next_block, context
+                )
                 if is_valid:
-                    logger.info(f"{context}: Успешно переписан блок ({count_chars(text)} симв.).")
-                    return text
+                    # Возвращаем текст *после* удаления маркеров, так как он прошел валидацию
+                    text_cleaned = text.replace(START_MARKER, "").replace(END_MARKER, "")
+                    logger.info(f"{context}: Успешно переписан и валидирован блок ({count_chars(text_cleaned)} симв. после очистки).")
+                    return text_cleaned # Возвращаем очищенный текст
                 logger.warning(f"{context}: {validation_error}")
         except Exception as e:
             logger.error(f"{context}: Ошибка вызова API: {e}")
@@ -458,17 +503,17 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             original_text = f.read()
         if not original_text.strip():
             logger.error("Входной файл пуст или содержит только пробельные символы.")
-            if progress_callback: 
+            if progress_callback:
                 progress_callback(0, 1)
             return
     except FileNotFoundError:
          logger.error(f"Входной файл не найден: {input_file}")
-         if progress_callback: 
+         if progress_callback:
              progress_callback(0, 1)
          return
     except Exception as e:
         logger.error(f"Ошибка чтения входного файла {input_file}: {e}", exc_info=True)
-        if progress_callback: 
+        if progress_callback:
             progress_callback(0, 1)
         return
 
@@ -510,13 +555,13 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             processed_idx = -1
         else:
             logger.error("Не удалось разбить текст на блоки при инициализации.")
-            if progress_callback: 
+            if progress_callback:
                 progress_callback(0, 1)
             return
 
     if not blocks or rewritten_text is None:
         logger.error("Критическая ошибка: отсутствуют блоки или текст для обработки.")
-        if progress_callback: 
+        if progress_callback:
             progress_callback(0, 1)
         return
 
@@ -525,7 +570,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     if progress_callback:
         progress_callback(processed_idx + 1, total_blocks)
 
-    current_system_instruction = SYSTEM_INSTRUCTION_BASE
+    current_system_instruction = SYSTEM_INSTRUCTION_BASE.format(START_MARKER=START_MARKER, END_MARKER=END_MARKER, min_len="{min_len}", max_len="{max_len}") # Подставим маркеры
 
     for i in range(total_blocks):
         if stop_event and stop_event.is_set():
@@ -567,6 +612,8 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         block_text = rewritten_text[start:end]
         original_block_length = block.get('original_char_length', len(block_text))
 
+        # Получение контекста (предыдущий и следующий блоки)
+        # Важно: Контекст берем из *текущего* состояния rewritten_text *до* модификации текущего блока
         prev_block_text = ""
         if i > 0:
             prev_block_info = blocks[i-1]
@@ -589,43 +636,48 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                  logger.warning(f"Некорректные границы для следующего блока {i+2}, используем пустой контекст.")
 
 
-        min_len = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
-        max_len = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
-        user_input_content = f"""Language: {language}
-Style: {style}
-Goal: {goal}
-Approximate Target Length: ~{min_len}-{max_len} characters.
 
-Instructions specific for this block (if any):
-Rewrite ONLY the marked segment below following the system instructions provided. Ensure the rewritten text is substantially different from the original and does not repeat full sentences from the surrounding context.
+        # Формируем текст с маркерами для API
+        text_with_markers = f"{rewritten_text[:start]}{START_MARKER}{block_text}{END_MARKER}{rewritten_text[end:]}"
 
-Text:
-{rewritten_text[:start]}{START_MARKER}{block_text}{END_MARKER}{rewritten_text[end:]}
-"""
+        # Создаем промпт для пользователя (динамически, т.к. длина меняется)
+        min_len_api = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
+        max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
+        user_input_content = create_rewrite_prompt(
+            language, style, goal, text_with_markers, original_block_length
+        )
+
+        # Вызываем API
         new_text = call_gemini_rewrite_api(
-            system_instruction=current_system_instruction,
+            system_instruction=current_system_instruction.format(min_len=min_len_api, max_len=max_len_api), # Подставляем длину
             user_content=user_input_content,
             model_name=model_name,
             orig_len=original_block_length,
-            original=block_text,
-            prev_block=prev_block_text,
-            next_block=next_block_text
+            original=block_text, # Оригинальный текст *этого* блока
+            prev_block=prev_block_text, # Контекст до
+            next_block=next_block_text  # Контекст после
         )
+        # `new_text` теперь уже приходит без маркеров, если валидация прошла успешно
 
-        if new_text is not None:
+        if new_text is not None: # Успешный переписанный и валидированный текст (уже без маркеров)
             new_text_len = count_chars(new_text)
-            delta = new_text_len - len(block_text)
+            delta = new_text_len - len(block_text) # Изменение длины относительно *оригинального* текста блока
             logger.info(f"Блок {i+1} успешно переписан. Изменение длины: {delta} симв.")
 
+            # Обновляем основной текст
             rewritten_text = rewritten_text[:start] + new_text + rewritten_text[end:]
 
-            block['end_char_index'] = start + new_text_len
+            # Обновляем информацию о текущем блоке
+            block['end_char_index'] = start + new_text_len # Новая конечная позиция
+            # block['original_char_length'] остается прежней, чтобы сравнения длины шли с оригиналом
             block['processed'] = True
             block['failed_attempts'] = 0
             processed_idx = i
 
+            # Сохраняем промежуточный результат
             save_intermediate(intermediate_file, rewritten_text, f"Блок {i+1}")
 
+            # Корректируем границы последующих блоков, если длина изменилась
             if delta != 0:
                 logger.debug(f"Сдвигаем границы последующих блоков на {delta}...")
                 for j in range(i + 1, total_blocks):
@@ -633,18 +685,20 @@ Text:
                     blocks[j]['end_char_index'] += delta
                 logger.debug("Сдвиг границ завершен.")
 
-        else:
+        else: # Переписывание не удалось
             block['failed_attempts'] += 1
             logger.error(f"Блок {i+1} не был переписан после {block['failed_attempts']} попыток.")
+            # Текст остается неизменным, границы не сдвигаются
 
         if progress_callback:
             progress_callback(i + 1, total_blocks)
 
+        # Сохранение состояния
         if save_interval and ((new_text is not None and (i + 1) % save_interval == 0) or block['failed_attempts'] >= MAX_RETRIES):
              logger.info(f"Сохранение состояния на блоке {i+1}...")
              save_state(state_file, {
                  'processed_block_index': processed_idx,
-                 'original_blocks_data': blocks,
+                 'original_blocks_data': blocks, # Сохраняем обновленные границы
                  'total_blocks': total_blocks,
                  'timestamp': time.time()
              })
@@ -653,7 +707,9 @@ Text:
     failed_count = sum(1 for b in blocks if b.get('failed_attempts', 0) >= MAX_RETRIES and not b.get('processed', False))
     logger.info(f"Переписывание завершено. Обработано: {processed_count}/{total_blocks}. Пропущено из-за ошибок: {failed_count}.")
 
-    save_intermediate(output_file, rewritten_text, "Финал")
+    # Финальное сохранение результата
+    final_file_path = os.path.join(output_dir, base_name + FINAL_SUFFIX) # Убедимся что имя правильное
+    save_intermediate(final_file_path, rewritten_text, "Финал")
 
     logger.info("Сохранение финального состояния...")
     save_state(state_file, {
@@ -663,13 +719,14 @@ Text:
         'timestamp': time.time()
     })
 
-    logger.info(f"Финальный результат сохранен в: {output_file}")
+    logger.info(f"Финальный результат сохранен в: {final_file_path}")
     logger.info(f"Финальное состояние сохранено в: {state_file}")
 
     if progress_callback:
         progress_callback(processed_count, total_blocks)
 
 
+# --- GUI Класс (без изменений) ---
 class BookRewriterApp:
     def __init__(self, master):
         self.master = master
@@ -686,12 +743,12 @@ class BookRewriterApp:
 
         ttk.Label(settings_frame, text="Входной файл:").grid(row=0, column=0, sticky=tk.W)
         self.input_var = tk.StringVar()
-        ttk.Entry(settings_frame, textvariable=self.input_var).grid(row=0, column=1, sticky=tk.EW)
+        ttk.Entry(settings_frame, textvariable=self.input_var, width=60).grid(row=0, column=1, sticky=tk.EW) # Увеличена ширина
         ttk.Button(settings_frame, text="Обзор", command=self.browse_input).grid(row=0, column=2)
 
         ttk.Label(settings_frame, text="Выходной файл:").grid(row=1, column=0, sticky=tk.W)
         self.output_var = tk.StringVar()
-        ttk.Entry(settings_frame, textvariable=self.output_var).grid(row=1, column=1, sticky=tk.EW)
+        ttk.Entry(settings_frame, textvariable=self.output_var, width=60).grid(row=1, column=1, sticky=tk.EW) # Увеличена ширина
         ttk.Button(settings_frame, text="Обзор", command=self.browse_output).grid(row=1, column=2)
 
         ttk.Label(settings_frame, text="Язык:").grid(row=2, column=0, sticky=tk.W)
@@ -701,51 +758,71 @@ class BookRewriterApp:
         ttk.Label(settings_frame, text="Стиль:").grid(row=3, column=0, sticky=tk.NW)
         self.style_text = tk.Text(settings_frame, height=4, width=50)
         self.style_text.grid(row=3, column=1, columnspan=2, sticky=tk.EW)
+        self.style_text.insert("1.0", "Увлекательный и живой повествовательный стиль, схожий с оригиналом, но с улучшенной динамикой и более богатой лексикой. Избегать канцеляризмов и излишней формальности.") # Пример
 
         ttk.Label(settings_frame, text="Цель:").grid(row=4, column=0, sticky=tk.NW)
         self.goal_text = tk.Text(settings_frame, height=4, width=50)
         self.goal_text.grid(row=4, column=1, columnspan=2, sticky=tk.EW)
+        self.goal_text.insert("1.0", "Переписать сегмент, сохраняя основной смысл и сюжетную линию, но делая его более выразительным и интересным для современного читателя. Устранить возможные повторы и улучшить читаемость. Обеспечить естественные переходы к соседним блокам.") # Пример
 
         self.resume_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Возобновить", variable=self.resume_var).grid(row=5, column=0, sticky=tk.W)
 
         ttk.Label(settings_frame, text="Модель:").grid(row=6, column=0, sticky=tk.W)
         self.model_var = tk.StringVar(value=REWRITER_MODEL_DEFAULT)
-        ttk.Combobox(settings_frame, textvariable=self.model_var, values=list_available_models(), state="readonly").grid(row=6, column=1, sticky=tk.EW)
+        self.model_combobox = ttk.Combobox(settings_frame, textvariable=self.model_var, values=list_available_models(), state="readonly", width=40) # Увеличена ширина
+        self.model_combobox.grid(row=6, column=1, columnspan=2, sticky=tk.EW)
+
+        settings_frame.grid_columnconfigure(1, weight=1) # Позволяет полю ввода растягиваться
 
         control_frame = ttk.Frame(main_frame)
-        control_frame.pack(fill=tk.X)
+        control_frame.pack(fill=tk.X, pady=5)
 
         self.start_btn = ttk.Button(control_frame, text="Старт", command=self.start_rewrite)
-        self.start_btn.pack(side=tk.LEFT)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
         self.stop_btn = ttk.Button(control_frame, text="Стоп", command=self.stop_rewrite, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
 
         self.status_var = tk.StringVar(value="Готов")
-        ttk.Label(control_frame, textvariable=self.status_var).pack(side=tk.RIGHT)
+        ttk.Label(control_frame, textvariable=self.status_var, anchor=tk.E).pack(side=tk.RIGHT, padx=5)
 
-        self.progress = ttk.Progressbar(control_frame, mode='determinate')
-        self.progress.pack(fill=tk.X, expand=True)
+        self.progress = ttk.Progressbar(control_frame, mode='determinate', length=300) # Уменьшена начальная длина
+        self.progress.pack(fill=tk.X, expand=True, padx=5)
 
         log_frame = ttk.LabelFrame(main_frame, text="Лог")
-        log_frame.pack(fill=tk.BOTH, expand=True)
-        self.log_area = scrolledtext.ScrolledText(log_frame, state=tk.DISABLED)
-        self.log_area.pack(fill=tk.BOTH, expand=True)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        self.log_area = scrolledtext.ScrolledText(log_frame, state=tk.DISABLED, height=15) # Уменьшена высота
+        self.log_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         gui_handler = QueueHandler(log_queue)
         gui_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
         logger.addHandler(gui_handler)
         self.master.after(100, self.process_log_queue)
 
+        # Добавляем обработчик закрытия окна
+        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
+
     def browse_input(self):
         file = filedialog.askopenfilename(filetypes=[("Текстовые файлы", "*.txt")])
         if file:
             self.input_var.set(file)
             if not self.output_var.get():
-                self.output_var.set(f"{os.path.splitext(file)[0]}{FINAL_SUFFIX}")
+                base, ext = os.path.splitext(file)
+                self.output_var.set(f"{base}{FINAL_SUFFIX}") # Авто-имя для выходного файла
 
     def browse_output(self):
-        file = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Текстовые файлы", "*.txt")])
+        # Предлагаем имя по умолчанию на основе входного файла, если он выбран
+        default_name = ""
+        input_path = self.input_var.get()
+        if input_path:
+             default_name = f"{os.path.splitext(input_path)[0]}{FINAL_SUFFIX}"
+        elif self.output_var.get(): # Если уже есть выходное имя, используем его
+             default_name = self.output_var.get()
+
+        file = filedialog.asksaveasfilename(defaultextension=".txt",
+                                            filetypes=[("Текстовые файлы", "*.txt")],
+                                            initialfile=os.path.basename(default_name) or "output_final_rewritten.txt",
+                                            initialdir=os.path.dirname(default_name) or ".")
         if file:
             self.output_var.set(file)
 
@@ -759,12 +836,27 @@ class BookRewriterApp:
                 self.log_area.yview(tk.END)
         except queue.Empty:
             pass
-        self.master.after(100, self.process_log_queue)
+        # Проверяем состояние потока и обновляем кнопки/статус
+        if self.rewrite_thread and not self.rewrite_thread.is_alive():
+            if not self.stop_event.is_set(): # Если поток завершился сам
+                 self.status_var.set("Завершено")
+            else: # Если был остановлен
+                 self.status_var.set("Остановлено")
+            self.start_btn['state'] = tk.NORMAL
+            self.stop_btn['state'] = tk.DISABLED
+            self.rewrite_thread = None # Сбрасываем поток
+
+        self.master.after(100, self.process_log_queue) # Повторяем проверку
 
     def update_progress(self, current: int, total: int):
-        self.progress['maximum'] = total
-        self.progress['value'] = current
-        self.status_var.set(f"Обработка: {current}/{total} ({current/total*100:.1f}%)")
+        if total > 0:
+            self.progress['maximum'] = total
+            self.progress['value'] = current
+            self.status_var.set(f"Обработка: {current}/{total} ({current/total*100:.1f}%)")
+        else:
+            self.progress['value'] = 0
+            self.status_var.set("Инициализация...")
+
 
     def start_rewrite(self):
         params = {
@@ -775,39 +867,79 @@ class BookRewriterApp:
             'goal': self.goal_text.get("1.0", tk.END).strip(),
             'rewriter_model': self.model_var.get(),
             'resume': self.resume_var.get(),
-            'save_interval': 1
+            'save_interval': self.save_interval_var.get() # Получаем интервал из GUI
         }
         if not all([params['input_file'], params['output_file'], params['style'], params['goal']]):
-            messagebox.showerror("Ошибка", "Заполните все обязательные поля.")
+            messagebox.showerror("Ошибка", "Заполните пути к файлам, стиль и цель переписывания.")
             return
-        configure_gemini()
+        if not os.path.exists(params['input_file']):
+             messagebox.showerror("Ошибка", f"Входной файл не найден:\n{params['input_file']}")
+             return
+
+        try:
+            configure_gemini()
+        except ValueError as e:
+             messagebox.showerror("Ошибка конфигурации", f"Не удалось настроить Gemini API:\n{e}\n\nПроверьте API-ключ (GOOGLE_API_KEY) в .env файле.")
+             return
+        except Exception as e:
+            messagebox.showerror("Ошибка конфигурации", f"Непредвиденная ошибка при настройке Gemini API:\n{e}")
+            return
+
         self.stop_event.clear()
         self.start_btn['state'] = tk.DISABLED
         self.stop_btn['state'] = tk.NORMAL
-        self.rewrite_thread = threading.Thread(target=rewrite_process, args=(params, self.update_progress, self.stop_event), daemon=True)
+        self.status_var.set("Запуск...")
+        self.progress['value'] = 0 # Сбрасываем прогресс
+        # Очищаем лог перед новым запуском (опционально)
+        # self.log_area.configure(state=tk.NORMAL)
+        # self.log_area.delete('1.0', tk.END)
+        # self.log_area.configure(state=tk.DISABLED)
+
+        self.rewrite_thread = threading.Thread(target=rewrite_process, args=(params, self.update_progress_threadsafe, self.stop_event), daemon=True)
         self.rewrite_thread.start()
+
+    # Безопасная для потоков версия update_progress
+    def update_progress_threadsafe(self, current, total):
+        self.master.after(0, self.update_progress, current, total)
+
 
     def stop_rewrite(self):
         if self.rewrite_thread and self.rewrite_thread.is_alive():
+            logger.warning("Получен сигнал остановки...")
+            self.status_var.set("Остановка...")
             self.stop_event.set()
-            self.stop_btn['state'] = tk.DISABLED
+            self.stop_btn['state'] = tk.DISABLED # Деактивируем кнопку, пока процесс не остановится
 
     def on_closing(self):
         if self.rewrite_thread and self.rewrite_thread.is_alive():
-            if messagebox.askyesno("Выход", "Остановить процесс и выйти?"):
+            if messagebox.askyesno("Выход", "Процесс переписывания активен. Остановить его и выйти?"):
                 self.stop_rewrite()
-                self.master.after(200, self.master.destroy)
+                self.master.after(200, self.master.destroy())
+            else:
+                return
         else:
             self.master.destroy()
 
+
 if __name__ == "__main__":
     log_file = "rewriter.log"
-    file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    logger.addHandler(file_handler)
-    logger.setLevel(logging.INFO)
+    # Настройка логгирования в файл с ротацией
+    try:
+        file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
+        logger.setLevel(logging.INFO) # Устанавливаем уровень INFO для файла
+    except Exception as e:
+        print(f"Не удалось настроить логгирование в файл: {e}")
+        logger.error(f"Не удалось настроить логгирование в файл: {e}")
+
 
     root = tk.Tk()
-    sv_ttk.set_theme("dark")
+    try:
+        sv_ttk.set_theme("dark") # Попробуем установить темную тему
+    except Exception as e:
+        print(f"Не удалось установить тему sv_ttk: {e}")
+        # Используем стандартную тему ttk, если sv_ttk не удалась
+        pass
     app = BookRewriterApp(root)
     root.mainloop()
