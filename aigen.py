@@ -867,7 +867,7 @@ class BookRewriterApp:
             'goal': self.goal_text.get("1.0", tk.END).strip(),
             'rewriter_model': self.model_var.get(),
             'resume': self.resume_var.get(),
-            'save_interval': self.save_interval_var.get() # Получаем интервал из GUI
+            'save_interval': 1 # Получаем интервал из GUI
         }
         if not all([params['input_file'], params['output_file'], params['style'], params['goal']]):
             messagebox.showerror("Ошибка", "Заполните пути к файлам, стиль и цель переписывания.")
