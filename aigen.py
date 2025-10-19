@@ -38,24 +38,20 @@ AVAILABLE_MODELS = [
     "gemini-2.0-flash-thinking-exp-01-21", "gemini-2.0-flash-thinking-exp", "gemini-2.0-flash-thinking-exp-1219",
     "learnlm-2.0-flash-experimental"
 ]
-REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp"
+REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp-image"
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
-BLOCK_TARGET_CHARS = 17000
+BLOCK_TARGET_CHARS = 10000
 MIN_REWRITE_LENGTH_RATIO = 0.60
 MAX_REWRITE_LENGTH_RATIO = 1.6
 SIMILARITY_THRESHOLD = 0.95
-OUTPUT_TOKEN_LIMIT = 5116
+OUTPUT_TOKEN_LIMIT = 32768
 MIN_BLOCK_LEN_FACTOR = 0.5
 MAX_BLOCK_LEN_FACTOR = 1.5
 SEARCH_RADIUS_FACTOR = 0.1
 SPLIT_PRIORITY = ['. ', '! ', '? ']
 MAX_RETRIES = 50
 RETRY_DELAY_SECONDS = 1
-
-GENERATION_CONFIG = genai.types.GenerationConfig(
-    temperature=0.5, top_p=0.90, max_output_tokens=OUTPUT_TOKEN_LIMIT
-)
 
 STATE_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
@@ -85,26 +81,30 @@ You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a
 
 **III. Strict Operational Constraints & Instructions**
 
-1. **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`.
+1. **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`. **Your output must not, under any circumstances, begin before the conceptual start of the marked segment or end after the conceptual end of the marked segment.**
 
-2. **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
+2. **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include ANY PART of this contextual text in your output.** This means your generated text should not replicate sentences or significant phrases from the surrounding, unmarked context.
 
-3. **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
+3. **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
 
-4. **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
+4. **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
 
-5. **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range.
+5. **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
 
-6. **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
+6. **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range.
 
-7. **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. Pay close attention to the boundaries.
+7. **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
 
-8. **Output Format:**
+8. **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. **Pay extremely close attention to the sentences immediately preceding `{START_MARKER}` and immediately following `{END_MARKER}`. Do not repeat them in your output.**
+
+9. **Output Format:**
 
    - Generate *only* the rewritten text corresponding to the segment between the markers.
+   - **Your output must begin with the rewritten version of the content that immediately follows `{START_MARKER}`.**
+   - **Your output must end with the rewritten version of the content that immediately precedes `{END_MARKER}`.**
    - **Do NOT include the `{START_MARKER}` or `{END_MARKER}` in your output.**
    - **Do NOT include any of the surrounding context in your output.**
-   - **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text.
+   - **Do NOT add any explanations, apologies, or introductory/concluding remarks.** Your output must be *only* the rewritten string, ready for direct substitution into the larger text. **If the original segment is empty, output an empty string.**
 
 **IV. Execution Logic**
 
@@ -317,15 +317,15 @@ Goal: {goal}
 Approximate Target Length: ~{min_len}-{max_len} characters.
 Instructions:
 
-Rewrite ONLY the marked segment.
+Rewrite ONLY the marked segment between {START_MARKER} and {END_MARKER}.
 
 Adhere to parameters. Preserve core meaning but enhance vividness.
 
 Ensure low similarity to the original marked segment.
 
-Avoid repeating sentences from the surrounding context.
+CRITICAL: Avoid repeating ANY sentences from the text OUTSIDE the markers. Your output must be ONLY the rewritten segment.
 
-Output ONLY the rewritten text block without ANY comments.
+Output ONLY the rewritten text block without ANY comments or markers.
 Text:
 {text_with_markers}
 """
@@ -404,7 +404,7 @@ def call_gemini_rewrite_api(
         return None
 
     generation_config = GenerationConfig(
-        temperature=0.3, top_p=0.95, max_output_tokens=OUTPUT_TOKEN_LIMIT
+        temperature=1.0, top_p=0.95, top_k=32, max_output_tokens=OUTPUT_TOKEN_LIMIT
     )
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
