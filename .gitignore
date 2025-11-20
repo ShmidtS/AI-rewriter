@@ -176,3 +176,5 @@ upgrade.py
 cashe.py
 test.py
 UPGRADE_GUIDE.md
+AGENTS.md
+.vscode/
