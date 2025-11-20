@@ -178,3 +178,5 @@ test.py
 UPGRADE_GUIDE.md
 AGENTS.md
 .vscode/
+.vs/
+.claude/
