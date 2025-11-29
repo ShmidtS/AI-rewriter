@@ -23,35 +23,39 @@ logger = logging.getLogger()
 
 try:
     load_dotenv()
-    GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
-    if not GEMINI_API_KEY:
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if not GOOGLE_API_KEY:
         logger.warning("Переменная GOOGLE_API_KEY не установлена.")
 except Exception as e:
     logger.error(f"Ошибка загрузки .env: {e}")
-    GEMINI_API_KEY = None
+    GOOGLE_API_KEY = None
 
-AVAILABLE_MODELS = [
-    "gemini-2.0-pro-exp", "gemini-2.0-flash-exp",
-    "gemini-1.5-pro", "gemini-1.5-pro-001", "gemini-1.5-flash-001-tuning", "gemini-1.5-flash-002",
-    "gemini-2.5-pro-exp-03-25",
-    "gemini-2.0-pro-exp-02-05",
-    "gemini-2.0-flash-thinking-exp-01-21", "gemini-2.0-flash-thinking-exp", "gemini-2.0-flash-thinking-exp-1219",
-    "learnlm-2.0-flash-experimental"
-]
-REWRITER_MODEL_DEFAULT = "gemini-2.0-flash-exp-image"
+REWRITER_MODEL_DEFAULT = "gemini-2.0-flash" # Обновляем модель по умолчанию
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
 BLOCK_TARGET_CHARS = 10000
 MIN_REWRITE_LENGTH_RATIO = 0.60
-MAX_REWRITE_LENGTH_RATIO = 1.6
+MAX_REWRITE_LENGTH_RATIO = 2.6
 SIMILARITY_THRESHOLD = 0.95
 OUTPUT_TOKEN_LIMIT = 32768
 MIN_BLOCK_LEN_FACTOR = 0.5
 MAX_BLOCK_LEN_FACTOR = 1.5
 SEARCH_RADIUS_FACTOR = 0.1
 SPLIT_PRIORITY = ['. ', '! ', '? ']
-MAX_RETRIES = 50
-RETRY_DELAY_SECONDS = 1
+# Улучшенные приоритеты разбиения с учетом абзацев и диалогов
+SPLIT_PRIORITY_ENHANCED = [
+    '\n\n',      # Двойной перенос строки (абзац)
+    '\n',        # Одиночный перенос строки
+    '. ', '! ', '? ',  # Конец предложения
+    '; ',        # Полуточка
+    ', ',        # Запятая (последний вариант)
+]
+MAX_RETRIES = 20
+RETRY_DELAY_SECONDS = 0
+# Адаптивные параметры генерации
+ADAPTIVE_TEMPERATURE_BASE = 1.0
+ADAPTIVE_TEMPERATURE_MIN = 0.5
+ADAPTIVE_TEMPERATURE_MAX = 1.2
 
 STATE_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
@@ -60,17 +64,17 @@ FINAL_SUFFIX = "_final_rewritten.txt"
 SYSTEM_INSTRUCTION_BASE = """
 ---
 
-### System Prompt v2.5 – Book Rewriter Agent
+### System Prompt v3.0 – Enhanced Book Rewriter Agent
 
 **I. Core Directive**
 
-You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a specific segment of text provided within a larger context, strictly adhering to the parameters and constraints given in each request. You operate as a component within a larger automated workflow that processes text in blocks. Your output must be precise, conformant, and directly usable by this workflow.
+You are a specialized AI Text Rewriter Agent with advanced capabilities for semantic transformation. Your sole function is to rewrite a specific segment of text provided within a larger context, strictly adhering to the parameters and constraints given in each request. You operate as a component within a larger automated workflow that processes text in blocks. Your output must be precise, conformant, and directly usable by this workflow.
 
 **II. Task Definition**
 
-1. **Identify Target Segment:** The input text will contain a segment clearly marked by `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers.
+1. **Identify Target Segment:** The input text will contain a segment clearly marked by `{START_MARKER}` and `{END_MARKER}`. Your task is to rewrite *only* the text located *between* these two markers. **ONLY the text between the markers should be rewritten - nothing else.**
 
-2. **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include this context in your output.**
+2. **Context Awareness:** Context may be provided separately in a "Context for coherence" section. This context is provided solely for understanding narrative flow and ensuring smooth transitions. **Do NOT modify, rewrite, or include this context in your output.** Use it only to understand how your rewritten segment should connect with surrounding text.
 
 3. **Rewrite Parameters:** You will be given specific parameters for each rewriting task:
 
@@ -79,25 +83,35 @@ You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a
    - **Goal:** The specific objective of the rewrite (e.g., "Improve clarity", "Simplify vocabulary", "Adapt for a younger audience", "Increase detail").
    - **Approximate Target Length:** A suggested character length range for the rewritten segment (e.g., "~{min_len}-{max_len} characters").
 
-**III. Strict Operational Constraints & Instructions**
+**III. Enhanced Operational Constraints & Instructions**
 
 1. **Focus Exclusively:** Rewrite *only* the text content found strictly between `{START_MARKER}` and `{END_MARKER}`. **Your output must not, under any circumstances, begin before the conceptual start of the marked segment or end after the conceptual end of the marked segment.**
 
-2. **Context Awareness:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include ANY PART of this contextual text in your output.** This means your generated text should not replicate sentences or significant phrases from the surrounding, unmarked context.
+2. **Context Awareness & Cohesion:** The text *before* the `{START_MARKER}` and *after* the `{END_MARKER}` is provided solely for context. **Do NOT modify, rewrite, or include ANY PART of this contextual text in your output.** However, analyze the context to:
+   - Understand the narrative flow and tone
+   - Ensure your rewritten segment creates smooth transitions
+   - Maintain consistency in character names, terminology, and style
+   - Avoid repeating sentences or phrases from the context
 
-3. **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters.
+3. **Parameter Adherence:** Strictly follow the specified `Language`, `Style`, and `Goal` parameters. Apply them consistently throughout the rewritten segment.
 
-4. **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance).
+4. **Meaning Preservation:** Preserve the core meaning, information, and narrative intent of the original segment unless the `Goal` explicitly dictates otherwise (e.g., simplification might remove nuance). Maintain all key facts, events, and character actions.
 
-5. **Contextual Cohesion:** Ensure the rewritten segment logically connects with the surrounding (unmodified) context provided before the `{START_MARKER}` and after the `{END_MARKER}`. Maintain smooth transitions.
+5. **Semantic Transformation:** The rewrite should be a genuine semantic transformation, not just a paraphrase. Consider:
+   - Using different sentence structures
+   - Employing varied vocabulary while maintaining meaning
+   - Reorganizing information flow when appropriate
+   - Adding depth and nuance where the Goal permits
 
-6. **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range.
+6. **Length Guideline:** Aim for a character count within the suggested `Approximate Target Length` range. Slight deviations are acceptable if they improve quality.
 
-7. **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation.
+7. **CRITICAL - Avoid High Similarity:** The rewritten text *must be substantially different* from the original text segment. Direct copying or minor paraphrasing that results in high textual similarity (e.g., >90-95% similar) is **unacceptable**. The rewrite should be a genuine transformation that maintains meaning but uses different expression.
 
 8. **CRITICAL - Avoid Context Sentence Repetition:** The rewritten text *must not* contain full sentences that are identical (or near-identical after normalization like lowercasing and punctuation removal) to full sentences present in the immediate context provided *before* the `{START_MARKER}` or *after* the `{END_MARKER}`. **Pay extremely close attention to the sentences immediately preceding `{START_MARKER}` and immediately following `{END_MARKER}`. Do not repeat them in your output.**
 
-9. **Output Format:**
+9. **Lexical Diversity:** Use varied vocabulary and expressions. Avoid excessive repetition of the same words or phrases from the original. Introduce synonyms and alternative phrasings while maintaining clarity.
+
+10. **Output Format:**
 
    - Generate *only* the rewritten text corresponding to the segment between the markers.
    - **Your output must begin with the rewritten version of the content that immediately follows `{START_MARKER}`.**
@@ -110,17 +124,27 @@ You are a specialized AI Text Rewriter Agent. Your sole function is to rewrite a
 
 1. Parse the `Parameters` and `Instructions`.
 
-2. Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
+2. Analyze the context before `{START_MARKER}` and after `{END_MARKER}` to understand narrative flow, tone, and key elements.
 
-3. Note the immediate contextual sentences before `{START_MARKER}` and after `{END_MARKER}`.
+3. Isolate the `[Original text segment to be rewritten.]` from the `Text:` section.
 
-4. Perform the rewrite according to all parameters and constraints (especially III.6 and III.7).
+4. Perform a semantic analysis of the original segment to identify:
+   - Core meaning and key information
+   - Narrative elements (characters, actions, descriptions)
+   - Style characteristics
+   - Structural patterns
 
-5. Output *only* the resulting rewritten string.
+5. Rewrite the segment according to all parameters and constraints, ensuring:
+   - Semantic transformation (different expression, same meaning)
+   - Lexical diversity
+   - Smooth transitions with context
+   - Adherence to Style and Goal parameters
+
+6. Output *only* the resulting rewritten string.
 
 **V. Final Output Requirement**
 
-Produce a single block of text representing the rewritten segment, conforming to all specified constraints, suitable for direct programmatic use.
+Produce a single block of text representing the rewritten segment, conforming to all specified constraints, suitable for direct programmatic use. The output should demonstrate clear semantic transformation while maintaining narrative coherence and contextual fit.
 
 ---
 """
@@ -142,10 +166,10 @@ class QueueHandler(logging.Handler):
         self.log_queue.put(self.format(record))
 
 def configure_gemini():
-    if not GEMINI_API_KEY:
+    if not GOOGLE_API_KEY:
         raise ValueError("API-ключ Gemini не установлен.")
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=GOOGLE_API_KEY)
         logger.info("Gemini API успешно сконфигурирован.")
         return True
     except Exception as e:
@@ -153,13 +177,32 @@ def configure_gemini():
         raise ValueError(f"Ошибка конфигурации: {e}")
 
 def list_available_models():
+    """Получает и отображает ВСЕ доступные модели через API без фильтрации."""
     try:
-        models = [m.name.split('/')[-1] for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        logger.info(f"Доступные модели: {', '.join(models)}")
-        return models
+        # Получаем полный список моделей через API без фильтрации
+        models_list = genai.list_models()
+        api_models = []
+
+        for model in models_list:
+            if 'generateContent' in model.supported_generation_methods:
+                model_name = model.name.split('/')[-1]
+                api_models.append(model_name)
+                logger.debug(f"Найдена модель: {model_name}")
+
+        all_models = sorted(api_models)
+
+        if all_models:
+            logger.info(f"Загружено {len(all_models)} моделей через API.")
+            # Выводим полный список в лог для отладки
+            logger.debug("Все доступные модели:\n" + "\n".join(all_models))
+            return all_models
+        else:
+            logger.error("Не найдено доступных моделей через API.")
+            return []
+
     except Exception as e:
-        logger.error(f"Ошибка получения моделей: {e}")
-        return AVAILABLE_MODELS
+        logger.error(f"Ошибка получения списка моделей через API: {e}")
+        return []
 
 
 def count_chars(text: str) -> int:
@@ -179,7 +222,40 @@ def normalize_sentence(sentence: str) -> str:
     """Приводит предложение к нижнему регистру и убирает конечные знаки препинания."""
     sentence = sentence.lower()
     sentence = sentence.rstrip(string.punctuation)
+    # Убираем множественные пробелы
+    sentence = re.sub(r'\s+', ' ', sentence).strip()
     return sentence
+
+def calculate_text_quality_metrics(original: str, rewritten: str) -> Dict[str, float]:
+    """
+    Вычисляет метрики качества переписанного текста.
+    Возвращает словарь с метриками: similarity, length_ratio, diversity.
+    """
+    metrics = {}
+    
+    # Метрика схожести (чем меньше, тем лучше для переписывания)
+    if original.strip() and rewritten.strip():
+        metrics['similarity'] = difflib.SequenceMatcher(None, original, rewritten).ratio()
+    else:
+        metrics['similarity'] = 1.0 if not rewritten.strip() else 0.0
+    
+    # Соотношение длин
+    orig_len = len(original)
+    rew_len = len(rewritten)
+    if orig_len > 0:
+        metrics['length_ratio'] = rew_len / orig_len
+    else:
+        metrics['length_ratio'] = 1.0
+    
+    # Метрика разнообразия (уникальные слова)
+    orig_words = set(re.findall(r'\b\w+\b', original.lower()))
+    rew_words = set(re.findall(r'\b\w+\b', rewritten.lower()))
+    if orig_words:
+        metrics['diversity'] = len(rew_words - orig_words) / max(len(orig_words), 1)
+    else:
+        metrics['diversity'] = 0.0
+    
+    return metrics
 
 def check_api_response(response: genai.types.GenerateContentResponse, context: str) -> Tuple[Optional[str], Optional[str], bool]:
     text, error, max_tokens = None, None, False
@@ -229,43 +305,57 @@ def check_api_response(response: genai.types.GenerateContentResponse, context: s
         return None, error, False
 
 def find_split_point(text: str, start: int, target_end: int, min_len: int, max_len: int) -> int:
+    """
+    Улучшенная функция поиска точки разбиения с учетом семантических границ.
+    Приоритет: абзацы > предложения > знаки препинания > пробелы.
+    """
     text_len = len(text)
     ideal_end = min(text_len, max(start + min_len, min(target_end, start + max_len)))
 
     if ideal_end >= text_len:
         return text_len
 
-    radius = int((target_end - start) * SEARCH_RADIUS_FACTOR)
+    # Увеличиваем радиус поиска для лучшего качества разбиения
+    radius = int((target_end - start) * max(SEARCH_RADIUS_FACTOR, 0.15))
     search_start = max(start + min_len, ideal_end - radius)
     search_end = min(text_len, ideal_end + radius, start + max_len)
 
     best_point = -1
     min_dist = float('inf')
+    best_priority = float('inf')  # Чем меньше, тем выше приоритет
 
-    for seq in SPLIT_PRIORITY:
+    # Используем улучшенные приоритеты разбиения
+    for priority, seq in enumerate(SPLIT_PRIORITY_ENHANCED):
         pos = search_start
         while pos < search_end:
             try:
                 idx = text.index(seq, pos, search_end) + len(seq)
                 if idx > start + min_len:
                     dist = abs(idx - ideal_end)
-                    if dist < min_dist:
+                    # Учитываем и приоритет, и расстояние
+                    score = dist + (priority * 1000)  # Приоритет важнее расстояния
+                    if score < (min_dist + (best_priority * 1000)):
                         min_dist = dist
                         best_point = idx
+                        best_priority = priority
                 pos = idx + 1
             except ValueError:
                 break
-        if best_point != -1:
+        # Если нашли хорошую точку с высоким приоритетом (абзац или предложение), используем её
+        if best_point != -1 and best_priority <= 2:  # Абзац или предложение
             return best_point
 
-    try:
-        last_space = text.rindex(' ', search_start, min(ideal_end, start + max_len))
-        if last_space > start:
-            return last_space + 1
-    except ValueError:
-        pass
+    # Если не нашли хорошую точку, ищем пробел
+    if best_point == -1:
+        try:
+            last_space = text.rindex(' ', search_start, min(ideal_end, start + max_len))
+            if last_space > start:
+                return last_space + 1
+        except ValueError:
+            pass
 
-    return min(ideal_end, start + max_len)
+    # Если нашли точку, возвращаем её, иначе возвращаем идеальную
+    return best_point if best_point != -1 else min(ideal_end, start + max_len)
 
 
 def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
@@ -302,87 +392,135 @@ def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
     logger.info(f"Создано {len(blocks)} блоков.")
     return blocks
 
-def create_rewrite_prompt(language: str, style: str, goal: str, text_with_markers: str, original_len: int) -> str:
+def create_rewrite_prompt(language: str, style: str, goal: str, block_text: str, prev_context: str, next_context: str, original_len: int) -> str:
+    """
+    Создает улучшенный промпт для переписывания.
+    Между маркерами передается ТОЛЬКО текст блока, контекст указывается отдельно.
+    """
     min_len = int(original_len * MIN_REWRITE_LENGTH_RATIO)
     max_len = int(original_len * MAX_REWRITE_LENGTH_RATIO)
+    
+    # Формируем текст с маркерами - только блок между маркерами
+    text_with_markers = f"{START_MARKER}{block_text}{END_MARKER}"
+    
+    # Формируем контекст для понимания связности
+    context_section = ""
+    if prev_context or next_context:
+        context_section = "\n\nContext for coherence (DO NOT include in output):\n"
+        if prev_context:
+            context_section += f"Previous text: ...{prev_context}\n"
+        if next_context:
+            context_section += f"Next text: {next_context}..."
+    
     return f"""
-Now start:
+Task: Rewrite the marked text segment
 
 Language: {language}
-
 Style: {style}
-
 Goal: {goal}
+Target Length: ~{min_len}-{max_len} characters
 
-Approximate Target Length: ~{min_len}-{max_len} characters.
-Instructions:
+CRITICAL REQUIREMENTS:
+1. Rewrite ONLY the text between {START_MARKER} and {END_MARKER}
+2. Preserve core meaning and all key information
+3. Use semantic transformation - different expression, same meaning
+4. Ensure lexical diversity - avoid repeating words from original
+5. Maintain smooth transitions with surrounding context (if provided)
+6. Do NOT repeat any sentences from the context provided below
+7. Output ONLY the rewritten segment - no markers, no explanations
 
-Rewrite ONLY the marked segment between {START_MARKER} and {END_MARKER}.
-
-Adhere to parameters. Preserve core meaning but enhance vividness.
-
-Ensure low similarity to the original marked segment.
-
-CRITICAL: Avoid repeating ANY sentences from the text OUTSIDE the markers. Your output must be ONLY the rewritten segment.
-
-Output ONLY the rewritten text block without ANY comments or markers.
-Text:
-{text_with_markers}
+Text to rewrite:
+{text_with_markers}{context_section}
 """
 
-# --- Измененная функция ---
-def validate_rewritten_text(text: str, original: str, orig_len: int, prev_block: str, next_block: str, context: str) -> Tuple[bool, Optional[str]]:
+# --- Улучшенная функция валидации ---
+def validate_rewritten_text(text: str, original: str, orig_len: int, prev_block: str, next_block: str, context: str) -> Tuple[bool, Optional[str], Optional[Dict[str, float]]]:
     """
-    Валидирует переписанный текст.
+    Улучшенная валидация переписанного текста с расширенными метриками качества.
     Маркеры START_MARKER и END_MARKER удаляются из 'text' перед проверкой контента.
+    Возвращает: (is_valid, error_message, quality_metrics)
     """
     # Проверяем, не пустой ли текст при непустом оригинале (до удаления маркеров)
     if not text.strip() and original.strip():
-        return False, f"{context}: Пустой текст при непустом оригинале."
+        return False, f"{context}: Пустой текст при непустом оригинале.", None
 
-    # Удаляем маркеры из текста *перед* дальнейшими проверками контента [1, 2, 3, 4, 5]
+    # Удаляем маркеры из текста *перед* дальнейшими проверками контента
     text_cleaned = text.replace(START_MARKER, "").replace(END_MARKER, "")
+
+    # Вычисляем метрики качества
+    quality_metrics = calculate_text_quality_metrics(original, text_cleaned)
 
     # --- Проверки выполняются на ОЧИЩЕННОМ тексте ('text_cleaned') ---
 
-    # Проверка на схожесть с оригиналом
+    # Улучшенная проверка на схожесть с оригиналом
     if original.strip() and text_cleaned.strip() and original != text_cleaned:
-        similarity = difflib.SequenceMatcher(None, original, text_cleaned).ratio()
+        similarity = quality_metrics['similarity']
         if similarity >= SIMILARITY_THRESHOLD:
-            return False, f"{context}: Слишком похож на оригинал ({similarity:.2f}) после очистки маркеров."
+            return False, f"{context}: Слишком похож на оригинал ({similarity:.3f}) после очистки маркеров.", quality_metrics
+        
+        # Дополнительная проверка: если схожесть очень высокая (>0.85), но не критическая, предупреждаем
+        if similarity > 0.85:
+            logger.warning(f"{context}: Высокая схожесть ({similarity:.3f}), но в пределах допустимого.")
 
-    # Проверка длины
+    # Проверка длины с более гибкими границами
     if orig_len > 0:
         text_len_cleaned = count_chars(text_cleaned)
         min_len = orig_len * MIN_REWRITE_LENGTH_RATIO
         max_len = orig_len * MAX_REWRITE_LENGTH_RATIO
         if text_len_cleaned > max_len:
-            return False, f"{context}: Слишком длинный ({text_len_cleaned} > {int(max_len)}) после очистки маркеров."
+            return False, f"{context}: Слишком длинный ({text_len_cleaned} > {int(max_len)}) после очистки маркеров.", quality_metrics
         # Проверяем на слишком короткий текст, только если оригинал не был совсем коротким
         if text_len_cleaned < min_len and orig_len > 20:
-            return False, f"{context}: Слишком короткий ({text_len_cleaned} < {int(min_len)}) после очистки маркеров."
+            return False, f"{context}: Слишком короткий ({text_len_cleaned} < {int(min_len)}) после очистки маркеров.", quality_metrics
 
-    # Проверка на повторение предложений из контекста
-    rewritten_sentences = [normalize_sentence(s) for s in split_into_sentences(text_cleaned)] # Используем очищенный текст
+    # Улучшенная проверка на повторение предложений из контекста
+    rewritten_sentences = [normalize_sentence(s) for s in split_into_sentences(text_cleaned)]
 
     if prev_block:
-        prev_sentences = set(normalize_sentence(s) for s in split_into_sentences(prev_block) if has_more_than_n_words(s))
+        prev_sentences = set(normalize_sentence(s) for s in split_into_sentences(prev_block) if has_more_than_n_words(s, 8))  # Уменьшили порог для более строгой проверки
         repeated_prev = [sent for sent in rewritten_sentences if sent in prev_sentences]
         if repeated_prev:
-            logger.debug(f"Повтор предложений из предыдущего блока: {repeated_prev}")
-            return False, f"{context}: Содержит предложение(я) из предыдущего блока."
+            logger.debug(f"Повтор предложений из предыдущего блока: {repeated_prev[:2]}...")  # Показываем только первые 2
+            return False, f"{context}: Содержит предложение(я) из предыдущего блока.", quality_metrics
 
     if next_block:
-        next_sentences = set(normalize_sentence(s) for s in split_into_sentences(next_block) if has_more_than_n_words(s))
+        next_sentences = set(normalize_sentence(s) for s in split_into_sentences(next_block) if has_more_than_n_words(s, 8))
         repeated_next = [sent for sent in rewritten_sentences if sent in next_sentences]
         if repeated_next:
-            logger.debug(f"Повтор предложений из следующего блока: {repeated_next}")
-            return False, f"{context}: Содержит предложение(я) из следующего блока."
+            logger.debug(f"Повтор предложений из следующего блока: {repeated_next[:2]}...")
+            return False, f"{context}: Содержит предложение(я) из следующего блока.", quality_metrics
+
+    # Дополнительная проверка: минимальное разнообразие
+    if quality_metrics['diversity'] < 0.1 and orig_len > 50:
+        logger.warning(f"{context}: Низкое разнообразие лексики ({quality_metrics['diversity']:.3f})")
 
     # Если все проверки пройдены
-    return True, None
-# --- Конец измененной функции ---
+    return True, None, quality_metrics
+# --- Конец улучшенной функции валидации ---
 
+
+def calculate_adaptive_temperature(failed_attempts: int, quality_metrics: Optional[Dict[str, float]] = None) -> float:
+    """
+    Вычисляет адаптивную температуру на основе количества неудачных попыток и метрик качества.
+    Больше попыток -> выше температура для большего разнообразия.
+    """
+    base_temp = ADAPTIVE_TEMPERATURE_BASE
+    
+    # Увеличиваем температуру с каждой неудачной попыткой
+    attempt_factor = min(failed_attempts * 0.05, 0.2)  # Максимум +0.2
+    
+    # Если метрики показывают высокую схожесть, увеличиваем температуру
+    similarity_factor = 0.0
+    if quality_metrics and quality_metrics.get('similarity', 0) > 0.85:
+        similarity_factor = (quality_metrics['similarity'] - 0.85) * 0.4  # До +0.06
+    
+    # Если низкое разнообразие, увеличиваем температуру
+    diversity_factor = 0.0
+    if quality_metrics and quality_metrics.get('diversity', 1) < 0.15:
+        diversity_factor = (0.15 - quality_metrics['diversity']) * 0.3  # До +0.045
+    
+    final_temp = base_temp + attempt_factor + similarity_factor + diversity_factor
+    return max(ADAPTIVE_TEMPERATURE_MIN, min(ADAPTIVE_TEMPERATURE_MAX, final_temp))
 
 def call_gemini_rewrite_api(
     system_instruction: str,
@@ -391,9 +529,13 @@ def call_gemini_rewrite_api(
     orig_len: int,
     original: str,
     prev_block: str,
-    next_block: str
+    next_block: str,
+    stop_event: threading.Event,
+    failed_attempts: int = 0,
+    previous_quality_metrics: Optional[Dict[str, float]] = None
 ) -> Optional[str]:
     try:
+        # Создаем модель без проверок - все модели включая с 'thinking' должны работать
         model = genai.GenerativeModel(
             model_name,
             system_instruction=system_instruction
@@ -403,9 +545,18 @@ def call_gemini_rewrite_api(
         logger.error(f"Ошибка инициализации модели '{model_name}': {e}")
         return None
 
+    # Адаптивная температура на основе предыдущих попыток
+    adaptive_temp = calculate_adaptive_temperature(failed_attempts, previous_quality_metrics)
+    
     generation_config = GenerationConfig(
-        temperature=1.0, top_p=0.95, top_k=32, max_output_tokens=OUTPUT_TOKEN_LIMIT
+        temperature=adaptive_temp, 
+        top_p=0.95, 
+        top_k=32, 
+        max_output_tokens=OUTPUT_TOKEN_LIMIT
     )
+    
+    if failed_attempts > 0:
+        logger.debug(f"Используется адаптивная температура: {adaptive_temp:.2f} (попыток: {failed_attempts})")
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -413,7 +564,27 @@ def call_gemini_rewrite_api(
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
+    # Обновляем температуру перед каждой попыткой на основе текущих failed_attempts
+    current_failed_attempts = failed_attempts
+    last_quality_metrics = previous_quality_metrics
+    
     for attempt in range(MAX_RETRIES):
+        # Проверяем флаг остановки перед каждой попыткой
+        if stop_event and stop_event.is_set():
+            logger.warning("Получен сигнал остановки во время попыток вызова API.")
+            return None
+
+        # Пересчитываем температуру для каждой попытки
+        if attempt > 0:
+            adaptive_temp = calculate_adaptive_temperature(current_failed_attempts + attempt, last_quality_metrics)
+            generation_config = GenerationConfig(
+                temperature=adaptive_temp, 
+                top_p=0.95, 
+                top_k=32, 
+                max_output_tokens=OUTPUT_TOKEN_LIMIT
+            )
+            logger.debug(f"Попытка {attempt + 1}: Адаптивная температура {adaptive_temp:.2f}")
+
         context = f"Попытка {attempt + 1}/{MAX_RETRIES}"
         logger.info(f"Вызов API: {context}")
         try:
@@ -427,19 +598,63 @@ def call_gemini_rewrite_api(
                 logger.error(f"{context}: Ошибка API: {error}")
             else:
                 # Валидация теперь происходит с учетом удаления маркеров внутри validate_rewritten_text
-                is_valid, validation_error = validate_rewritten_text(
+                is_valid, validation_error, quality_metrics = validate_rewritten_text(
                     text, original, orig_len, prev_block, next_block, context
                 )
                 if is_valid:
                     # Возвращаем текст *после* удаления маркеров, так как он прошел валидацию
                     text_cleaned = text.replace(START_MARKER, "").replace(END_MARKER, "")
-                    logger.info(f"{context}: Успешно переписан и валидирован блок ({count_chars(text_cleaned)} симв. после очистки).")
+                    metrics_str = ""
+                    if quality_metrics:
+                        metrics_str = f" (схожесть: {quality_metrics['similarity']:.3f}, разнообразие: {quality_metrics['diversity']:.3f})"
+                    logger.info(f"{context}: Успешно переписан и валидирован блок ({count_chars(text_cleaned)} симв. после очистки){metrics_str}.")
                     return text_cleaned # Возвращаем очищенный текст
-                logger.warning(f"{context}: {validation_error}")
+                else:
+                    logger.warning(f"{context}: {validation_error}")
+                    # Сохраняем метрики для следующей попытки (адаптивная температура)
+                    if quality_metrics:
+                        last_quality_metrics = quality_metrics
         except Exception as e:
-            logger.error(f"{context}: Ошибка вызова API: {e}")
+            error_msg = str(e)
+            logger.error(f"{context}: Ошибка вызова API: {error_msg}")
+
+            # Проверяем на ошибку квоты (429) и извлекаем время ожидания
+            if "429" in error_msg and "retry_delay" in error_msg:
+                try:
+                    # Извлекаем время ожидания из сообщения об ошибке
+                    import re
+                    retry_match = re.search(r'retry_delay\s*{\s*seconds:\s*(\d+)', error_msg)
+                    if retry_match:
+                        retry_seconds = int(retry_match.group(1))
+                        logger.warning(f"{context}: Достигнут лимит API. Ожидание {retry_seconds} секунд...")
+
+                        # Проверяем остановку во время ожидания
+                        for wait_second in range(retry_seconds):
+                            if stop_event and stop_event.is_set():
+                                logger.warning("Получен сигнал остановки во время ожидания лимита API.")
+                                return None
+                            time.sleep(1)
+
+                        continue  # Пробуем снова после ожидания
+                except Exception as parse_error:
+                    logger.error(f"{context}: Не удалось извлечь время ожидания из ошибки: {parse_error}")
+
+            # Если это не ошибка квоты или не удалось извлечь время, используем стандартную задержку
+            if attempt < MAX_RETRIES - 1:
+                # Проверяем остановку во время стандартной задержки
+                for wait_second in range(RETRY_DELAY_SECONDS):
+                    if stop_event and stop_event.is_set():
+                        logger.warning("Получен сигнал остановки во время стандартной задержки.")
+                        return None
+                    time.sleep(1)
+
+        # Если это не ошибка квоты, используем стандартную задержку между попытками
         if attempt < MAX_RETRIES - 1:
-            time.sleep(RETRY_DELAY_SECONDS)
+            for wait_second in range(RETRY_DELAY_SECONDS):
+                if stop_event and stop_event.is_set():
+                    logger.warning("Получен сигнал остановки во время задержки между попытками.")
+                    return None
+                time.sleep(1)
 
     logger.error("Исчерпаны попытки переписывания.")
     return None
@@ -612,15 +827,22 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         block_text = rewritten_text[start:end]
         original_block_length = block.get('original_char_length', len(block_text))
 
-        # Получение контекста (предыдущий и следующий блоки)
+        # Улучшенное получение контекста (предыдущий и следующий блоки)
         # Важно: Контекст берем из *текущего* состояния rewritten_text *до* модификации текущего блока
+        # Используем расширенный контекст для лучшей связности (последние 2-3 предложения предыдущего блока)
         prev_block_text = ""
         if i > 0:
             prev_block_info = blocks[i-1]
             prev_start = prev_block_info['start_char_index']
             prev_end = prev_block_info['end_char_index']
             if 0 <= prev_start <= prev_end <= current_rewritten_text_len:
-                 prev_block_text = rewritten_text[prev_start:prev_end]
+                full_prev_text = rewritten_text[prev_start:prev_end]
+                # Берем последние 2-3 предложения для контекста (достаточно для связности)
+                prev_sentences = split_into_sentences(full_prev_text)
+                if len(prev_sentences) > 3:
+                    prev_block_text = ' '.join(prev_sentences[-3:])  # Последние 3 предложения
+                else:
+                    prev_block_text = full_prev_text  # Если предложений мало, берем весь блок
             else:
                  logger.warning(f"Некорректные границы для предыдущего блока {i}, используем пустой контекст.")
 
@@ -631,23 +853,30 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             next_end = next_block_info['end_char_index']
             safe_next_end = min(next_end, current_rewritten_text_len)
             if 0 <= next_start <= safe_next_end <= current_rewritten_text_len:
-                 next_block_text = rewritten_text[next_start:safe_next_end]
+                full_next_text = rewritten_text[next_start:safe_next_end]
+                # Берем первые 2-3 предложения для контекста
+                next_sentences = split_into_sentences(full_next_text)
+                if len(next_sentences) > 3:
+                    next_block_text = ' '.join(next_sentences[:3])  # Первые 3 предложения
+                else:
+                    next_block_text = full_next_text  # Если предложений мало, берем весь блок
             else:
                  logger.warning(f"Некорректные границы для следующего блока {i+2}, используем пустой контекст.")
 
 
 
-        # Формируем текст с маркерами для API
-        text_with_markers = f"{rewritten_text[:start]}{START_MARKER}{block_text}{END_MARKER}{rewritten_text[end:]}"
-
         # Создаем промпт для пользователя (динамически, т.к. длина меняется)
+        # Передаем только текст блока между маркерами, контекст отдельно
         min_len_api = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
         max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
         user_input_content = create_rewrite_prompt(
-            language, style, goal, text_with_markers, original_block_length
+            language, style, goal, block_text, prev_block_text, next_block_text, original_block_length
         )
 
-        # Вызываем API
+        # Вызываем API с адаптивными параметрами
+        block_failed_attempts = block.get('failed_attempts', 0)
+        previous_quality = block.get('last_quality_metrics', None)
+        
         new_text = call_gemini_rewrite_api(
             system_instruction=current_system_instruction.format(min_len=min_len_api, max_len=max_len_api), # Подставляем длину
             user_content=user_input_content,
@@ -655,8 +884,17 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             orig_len=original_block_length,
             original=block_text, # Оригинальный текст *этого* блока
             prev_block=prev_block_text, # Контекст до
-            next_block=next_block_text  # Контекст после
+            next_block=next_block_text,  # Контекст после
+            stop_event=stop_event,
+            failed_attempts=block_failed_attempts,
+            previous_quality_metrics=previous_quality
         )
+
+        # Если API вернул None из-за лимита, делаем дополнительную паузу перед следующим блоком
+        if new_text is None:
+            logger.warning(f"Блок {i+1}: Пропуск из-за ошибки API. Дополнительная пауза 10 секунд...")
+            time.sleep(10)
+            continue
         # `new_text` теперь уже приходит без маркеров, если валидация прошла успешно
 
         if new_text is not None: # Успешный переписанный и валидированный текст (уже без маркеров)
@@ -672,6 +910,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             # block['original_char_length'] остается прежней, чтобы сравнения длины шли с оригиналом
             block['processed'] = True
             block['failed_attempts'] = 0
+            block['last_quality_metrics'] = None  # Сбрасываем метрики при успехе
             processed_idx = i
 
             # Сохраняем промежуточный результат
@@ -687,6 +926,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
 
         else: # Переписывание не удалось
             block['failed_attempts'] += 1
+            # Метрики качества будут сохранены в следующей попытке через параметр previous_quality_metrics
             logger.error(f"Блок {i+1} не был переписан после {block['failed_attempts']} попыток.")
             # Текст остается неизменным, границы не сдвигаются
 
@@ -769,8 +1009,10 @@ class BookRewriterApp:
         ttk.Checkbutton(settings_frame, text="Возобновить", variable=self.resume_var).grid(row=5, column=0, sticky=tk.W)
 
         ttk.Label(settings_frame, text="Модель:").grid(row=6, column=0, sticky=tk.W)
-        self.model_var = tk.StringVar(value=REWRITER_MODEL_DEFAULT)
-        self.model_combobox = ttk.Combobox(settings_frame, textvariable=self.model_var, values=list_available_models(), state="readonly", width=40) # Увеличена ширина
+        available_models = list_available_models()
+        default_model = REWRITER_MODEL_DEFAULT if available_models and REWRITER_MODEL_DEFAULT in available_models else (available_models[0] if available_models else "gemini-1.5-flash")
+        self.model_var = tk.StringVar(value=default_model)
+        self.model_combobox = ttk.Combobox(settings_frame, textvariable=self.model_var, values=available_models, state="readonly", width=40) # Увеличена ширина
         self.model_combobox.grid(row=6, column=1, columnspan=2, sticky=tk.EW)
 
         settings_frame.grid_columnconfigure(1, weight=1) # Позволяет полю ввода растягиваться

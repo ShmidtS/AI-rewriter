@@ -49,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.pydeploy_backups/*
 cover/
 
 # Translations
@@ -180,3 +181,5 @@ AGENTS.md
 .vscode/
 .vs/
 .claude/
+.pydeploy_cache.json
+requirements.lock
