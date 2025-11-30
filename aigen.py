@@ -30,7 +30,7 @@ except Exception as e:
     logger.error(f"Ошибка загрузки .env: {e}")
     GOOGLE_API_KEY = None
 
-REWRITER_MODEL_DEFAULT = "gemini-2.0-flash" # Обновляем модель по умолчанию
+REWRITER_MODEL_DEFAULT = "gemini-2.5-flash" # Обновляем модель по умолчанию
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
 BLOCK_TARGET_CHARS = 10000
