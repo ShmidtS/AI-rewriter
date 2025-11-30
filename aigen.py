@@ -838,11 +838,11 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             if 0 <= prev_start <= prev_end <= current_rewritten_text_len:
                 full_prev_text = rewritten_text[prev_start:prev_end]
                 # Берем последние 2-3 предложения для контекста (достаточно для связности)
-                prev_sentences = split_into_sentences(full_prev_text)
-                if len(prev_sentences) > 3:
-                    prev_block_text = ' '.join(prev_sentences[-3:])  # Последние 3 предложения
-                else:
-                    prev_block_text = full_prev_text  # Если предложений мало, берем весь блок
+                # prev_sentences = split_into_sentences(full_prev_text)
+                # if len(prev_sentences) > 3:
+                #     prev_block_text = ' '.join(prev_sentences[-3:])  # Последние 3 предложения
+                # else:
+                prev_block_text = full_prev_text  # Если предложений мало, берем весь блок
             else:
                  logger.warning(f"Некорректные границы для предыдущего блока {i}, используем пустой контекст.")
 
@@ -855,11 +855,11 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             if 0 <= next_start <= safe_next_end <= current_rewritten_text_len:
                 full_next_text = rewritten_text[next_start:safe_next_end]
                 # Берем первые 2-3 предложения для контекста
-                next_sentences = split_into_sentences(full_next_text)
-                if len(next_sentences) > 3:
-                    next_block_text = ' '.join(next_sentences[:3])  # Первые 3 предложения
-                else:
-                    next_block_text = full_next_text  # Если предложений мало, берем весь блок
+                # next_sentences = split_into_sentences(full_next_text)
+                # if len(next_sentences) > 3:
+                #     next_block_text = ' '.join(next_sentences[:3])  # Первые 3 предложения
+                # else:
+                next_block_text = full_next_text  # Если предложений мало, берем весь блок
             else:
                  logger.warning(f"Некорректные границы для следующего блока {i+2}, используем пустой контекст.")
 
