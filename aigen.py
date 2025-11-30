@@ -993,7 +993,14 @@ class BookRewriterApp:
 
         ttk.Label(settings_frame, text="Язык:").grid(row=2, column=0, sticky=tk.W)
         self.lang_var = tk.StringVar(value="Русский")
-        ttk.Combobox(settings_frame, textvariable=self.lang_var, values=["Русский", "English"], state="readonly").grid(row=2, column=1, sticky=tk.W)
+        languages = [
+            "Русский", "English", "Español", "Français", "Deutsch", "Italiano",
+            "Português", "中文", "日本語", "한국어", "العربية", "हिन्दी",
+            "Türkçe", "Polski", "Nederlands", "Svenska", "Norsk", "Dansk",
+            "Suomi", "Čeština", "Slovenčina", "Magyar", "Română", "Български",
+            "Українська", "Ελληνικά", "עברית", "ไทย", "Tiếng Việt", "Bahasa Indonesia"
+        ]
+        ttk.Combobox(settings_frame, textvariable=self.lang_var, values=languages, state="readonly", width=20).grid(row=2, column=1, sticky=tk.W)
 
         ttk.Label(settings_frame, text="Стиль:").grid(row=3, column=0, sticky=tk.NW)
         self.style_text = tk.Text(settings_frame, height=4, width=50)
