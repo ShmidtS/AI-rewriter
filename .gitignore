@@ -181,5 +181,6 @@ AGENTS.md
 .vscode/
 .vs/
 .claude/
+.serena/
 .pydeploy_cache.json
 requirements.lock

@@ -1,4 +1,5 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import os
 import time
 import json
@@ -14,7 +15,6 @@ from logging.handlers import RotatingFileHandler
 import sv_ttk
 import re
 import string
-from google.generativeai.types import GenerationConfig, HarmCategory, HarmBlockThreshold
 
 # --- Конфигурация и константы ---
 log_queue = queue.Queue()
@@ -186,9 +186,10 @@ def configure_gemini():
         logger.error(error_msg)
         raise ValueError(error_msg)
     try:
-        genai.configure(api_key=GOOGLE_API_KEY)
+        # Инициализация клиента (делается один раз)
+        client = genai.Client(api_key=GOOGLE_API_KEY)
         logger.info("Gemini API успешно сконфигурирован.")
-        return True
+        return client
     except Exception as e:
         logger.error(f"Ошибка конфигурации Gemini API: {e}", exc_info=True)
         raise ValueError(f"Ошибка конфигурации: {e}")
@@ -196,11 +197,15 @@ def configure_gemini():
 
 def list_available_models():
     try:
-        models_list = genai.list_models()
+        # Используем клиент для получения списка моделей
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        models_list = client.models.list()
         api_models = []
 
         for model in models_list:
-            if "generateContent" in model.supported_generation_methods:
+            # В новой версии SDK атрибут называется supported_actions вместо supported_generation_methods
+            # Проверяем, поддерживает ли модель генерацию контента
+            if hasattr(model, 'supported_actions') and 'generateContent' in model.supported_actions:
                 model_name = model.name.split("/")[-1]
                 api_models.append(model_name)
                 logger.debug(f"Найдена модель: {model_name}")
@@ -212,7 +217,7 @@ def list_available_models():
             logger.debug("Все доступные модели:\n" + "\n".join(all_models))
             return all_models
         else:
-            logger.error("Не найдено доступных моделей через API.")
+            logger.warning("Не найдено доступных моделей через API, используем список по умолчанию.")
             return []
 
     except Exception as e:
@@ -298,7 +303,7 @@ def calculate_text_quality_metrics(original: str, rewritten: str) -> Dict[str, f
 
 
 def check_api_response(
-    response: genai.types.GenerateContentResponse, context: str
+    response: types.GenerateContentResponse, context: str
 ) -> Tuple[Optional[str], Optional[str], bool, bool]:
     """
     Проверяет ответ API и возвращает: (text, error, max_tokens, is_blocked)
@@ -306,7 +311,7 @@ def check_api_response(
     """
     text, error, max_tokens, is_blocked = None, None, False, False
 
-    if response.prompt_feedback.block_reason:
+    if response.prompt_feedback and response.prompt_feedback.block_reason:
         is_blocked = True
         block_reason = response.prompt_feedback.block_reason.name
         error = f"{context}: Промпт заблокирован ({block_reason})."
@@ -331,14 +336,16 @@ def check_api_response(
 
     candidate = response.candidates[0]
     finish_reason = getattr(candidate, "finish_reason", None)
-    finish_value = int(finish_reason.value) if finish_reason else 0
+    finish_str = str(finish_reason) if finish_reason else ""
 
-    if finish_value == 3:
+    # Check for blocking reasons (SAFETY, BLOCKLIST, PROHIBITED_CONTENT, RECITATION)
+    blocking_reasons = ["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "RECITATION", "BLOCK"]
+    if any(reason in finish_str for reason in blocking_reasons):
         is_blocked = True
-        error = f"{context}: Ответ заблокирован фильтром безопасности."
+        error = f"{context}: Ответ заблокирован фильтром безопасности ({finish_str})."
         logger.warning(f"{error} Попытка fallback.")
         return None, error, False, is_blocked
-    elif finish_value == 2:
+    elif "MAX_TOKENS" in finish_str:
         max_tokens = True
         logger.warning(f"{context}: Ответ усечен (MAX_TOKENS).")
 
@@ -681,6 +688,7 @@ def calculate_adaptive_temperature(
 
 
 def call_gemini_rewrite_api(
+    client,
     system_instruction: str,
     user_content: str,
     model_name: str,
@@ -695,35 +703,15 @@ def call_gemini_rewrite_api(
     style: str = "",
     goal: str = "",
 ) -> Optional[str]:
-    try:
-        model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-        logger.info(f"Инициализирована модель '{model_name}' с системной инструкцией.")
-    except Exception as e:
-        logger.error(f"Ошибка инициализации модели '{model_name}': {e}")
-        return None
-
     # Адаптивная температура на основе предыдущих попыток
     adaptive_temp = calculate_adaptive_temperature(
         failed_attempts, previous_quality_metrics
-    )
-
-    generation_config = GenerationConfig(
-        temperature=adaptive_temp,
-        top_p=0.95,
-        top_k=32,
-        max_output_tokens=OUTPUT_TOKEN_LIMIT,
     )
 
     if failed_attempts > 0:
         logger.debug(
             f"Используется адаптивная температура: {adaptive_temp:.2f} (попыток: {failed_attempts})"
         )
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
 
     # Обновляем температуру перед каждой попыткой на основе текущих failed_attempts
     current_failed_attempts = failed_attempts
@@ -741,12 +729,6 @@ def call_gemini_rewrite_api(
         if attempt > 0:
             adaptive_temp = calculate_adaptive_temperature(
                 current_failed_attempts + attempt, last_quality_metrics
-            )
-            generation_config = GenerationConfig(
-                temperature=adaptive_temp,
-                top_p=0.95,
-                top_k=32,
-                max_output_tokens=OUTPUT_TOKEN_LIMIT,
             )
             logger.debug(
                 f"Попытка {attempt + 1}: Адаптивная температура {adaptive_temp:.2f}"
@@ -776,10 +758,17 @@ def call_gemini_rewrite_api(
 
         logger.info(f"Вызов API: {context}{' (fallback)' if use_fallback else ''}")
         try:
-            response = model.generate_content(
-                contents=[{"role": "user", "parts": [{"text": current_content}]}],
-                generation_config=generation_config,
-                safety_settings=safety_settings,
+            # В новой версии вызов выглядит так:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=current_content,
+                config=types.GenerateContentConfig(
+                    temperature=adaptive_temp,
+                    top_p=0.95,
+                    top_k=32,
+                    max_output_tokens=OUTPUT_TOKEN_LIMIT,
+                    system_instruction=system_instruction
+                )
             )
             text, error, max_tokens, is_blocked = check_api_response(response, context)
 
@@ -979,6 +968,15 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         f"Язык: {language}, Стиль: {style[:50]}..., Цель: {goal[:50]}..., Модель: {model_name}"
     )
     logger.info(f"Возобновление: {resume}, Интервал сохранения: {save_interval}")
+
+    # Инициализация клиента Gemini
+    try:
+        client = configure_gemini()
+    except Exception as e:
+        logger.error(f"Не удалось инициализировать Gemini API: {e}")
+        if progress_callback:
+            progress_callback(0, 1)
+        return
 
     try:
         with open(input_file, "r", encoding="utf-8") as f:
@@ -1186,6 +1184,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
         previous_quality = block.get("last_quality_metrics", None)
 
         new_text = call_gemini_rewrite_api(
+            client,
             system_instruction=current_system_instruction.format(
                 min_len=min_len_api, max_len=max_len_api
             ),  # Подставляем длину
@@ -1387,7 +1386,7 @@ class BookRewriterApp:
         self.style_text.grid(row=3, column=1, columnspan=2, sticky=tk.EW)
         self.style_text.insert(
             "1.0",
-            "Увлекательный и живой повествовательный стиль, схожий с оригиналом, но с улучшенной динамикой и более богатой лексикой. Избегать канцеляризмов и излишней формальности.",
+            "Увлекательный и живой повествовательный стиль, в стиле лучших мировых аторов с улучшенной динамикой и более богатой лексикой.",
         )
 
         ttk.Label(settings_frame, text="Цель:").grid(row=4, column=0, sticky=tk.NW)
@@ -1395,7 +1394,7 @@ class BookRewriterApp:
         self.goal_text.grid(row=4, column=1, columnspan=2, sticky=tk.EW)
         self.goal_text.insert(
             "1.0",
-            "Переписать сегмент, сохраняя основной смысл и сюжетную линию, но делая его более выразительным и интересным для современного читателя. Устранить возможные повторы и улучшить читаемость. Обеспечить естественные переходы к соседним блокам.",
+            "Переписать сегмент, сохраняя основной смысл и сюжетную линию, но делая сюжет более выразительным и логичным учитывая весь контекст. Устранить возможные повторы и улучшить читаемость. Обеспечить естественные переходы к соседним блокам.",
         )
 
         self.resume_var = tk.BooleanVar(value=True)
