@@ -182,5 +182,7 @@ AGENTS.md
 .vs/
 .claude/
 .serena/
+.omc/
+context_portal/
 .pydeploy_cache.json
 requirements.lock
