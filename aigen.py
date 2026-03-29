@@ -1,6 +1,5 @@
-from google import genai
-from google.genai import types
 import os
+import openai  # Локальный API (OpenAI-совместимый)
 import time
 import json
 import logging
@@ -25,14 +24,14 @@ logger = logging.getLogger()
 
 try:
     load_dotenv()
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    if not GOOGLE_API_KEY:
-        logger.warning("Переменная GOOGLE_API_KEY не установлена.")
+    # Проверка локального API токена
+    LOCAL_API_TOKEN = os.getenv("AUTH_TOKEN", "sk-admin74203")
+    if not LOCAL_API_TOKEN:
+        logger.warning("Переменная AUTH_TOKEN не установлена.")
 except Exception as e:
     logger.error(f"Ошибка загрузки .env: {e}")
-    GOOGLE_API_KEY = None
 
-REWRITER_MODEL_DEFAULT = "gemini-2.5-flash"
+REWRITER_MODEL_DEFAULT = "nvidia/nvidia/nemotron-3-super-120b-a12b"
 START_MARKER = "<|~START_REWRITE~|>"
 END_MARKER = "<|~END_REWRITE~|>"
 BLOCK_TARGET_CHARS = 15000
@@ -55,7 +54,7 @@ SPLIT_PRIORITY_ENHANCED = [
     ", ",  # Запятая (последний вариант)
 ]
 MAX_RETRIES = 20
-RETRY_DELAY_SECONDS = 0
+RETRY_DELAY_SECONDS = 2  # Базовая задержка между попытками (секунды)
 # Адаптивные параметры генерации
 ADAPTIVE_TEMPERATURE_BASE = 1.0
 ADAPTIVE_TEMPERATURE_MIN = 0.5
@@ -64,6 +63,13 @@ ADAPTIVE_TEMPERATURE_MAX = 1.2
 STATE_SUFFIX = "_rewrite_state.json"
 INTERMEDIATE_SUFFIX = "_intermediate.txt"
 FINAL_SUFFIX = "_final_rewritten.txt"
+
+# Константы для локального API (OpenAI-совместимый)
+LOCAL_API_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
+LOCAL_API_TOKEN = os.getenv("AUTH_TOKEN", "sk-admin74203")
+LOCAL_MODEL_NAME = os.getenv("MODEL", "nvidia/nvidia/nemotron-3-super-120b-a12b")
+LOCAL_CONTEXT_WINDOW = int(os.getenv("CONTEXT_WINDOW", "1000000"))
+LOCAL_MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "32768"))
 
 # Константы для валидации
 MAX_SENTENCE_SIMILARITY_THRESHOLD = 0.95
@@ -169,6 +175,63 @@ class BlockInfo(TypedDict):
     failed_attempts: int
 
 
+class GlobalContext:
+    """
+    Хранит глобальный контекст книги для обеспечения связности повествования.
+    Включает персонажей, события сюжета, темы и стилистические заметки.
+    """
+
+    def __init__(
+        self,
+        characters: Optional[List[Dict]] = None,
+        plot_points: Optional[List[Dict]] = None,
+        themes: Optional[List[str]] = None,
+        style_notes: Optional[List[str]] = None,
+    ):
+        self.characters = characters if characters is not None else []
+        self.plot_points = plot_points if plot_points is not None else []
+        self.themes = themes if themes is not None else []
+        self.style_notes = style_notes if style_notes is not None else []
+
+    def to_json(self) -> Dict:
+        """Возвращает словарь для JSON-сериализации."""
+        return {
+            "characters": self.characters,
+            "plot_points": self.plot_points,
+            "themes": self.themes,
+            "style_notes": self.style_notes,
+        }
+
+    def update_from_response(self, context_update: Dict) -> None:
+        """Обновляет контекст из ответа API."""
+        if not context_update:
+            return
+
+        # Обновляем персонажей (добавляем новых)
+        if "characters" in context_update:
+            for char in context_update["characters"]:
+                if char not in self.characters:
+                    self.characters.append(char)
+
+        # Обновляем события сюжета
+        if "plot_points" in context_update:
+            for point in context_update["plot_points"]:
+                if point not in self.plot_points:
+                    self.plot_points.append(point)
+
+        # Обновляем темы
+        if "themes" in context_update:
+            for theme in context_update["themes"]:
+                if theme not in self.themes:
+                    self.themes.append(theme)
+
+        # Обновляем стилистические заметки
+        if "style_notes" in context_update:
+            for note in context_update["style_notes"]:
+                if note not in self.style_notes:
+                    self.style_notes.append(note)
+
+
 class QueueHandler(logging.Handler):
     def __init__(self, log_queue):
         super().__init__()
@@ -178,51 +241,89 @@ class QueueHandler(logging.Handler):
         self.log_queue.put(self.format(record))
 
 
-def configure_gemini():
-    if not GOOGLE_API_KEY:
-        error_msg = (
-            "API-ключ Gemini не установлен в переменной окружения GOOGLE_API_KEY"
-        )
-        logger.error(error_msg)
-        raise ValueError(error_msg)
+def configure_local_api():
+    """
+    Конфигурирует клиент для локального LLM API (Ollama/OpenAI-compatible).
+    Возвращает OpenAI-совместимый клиент.
+    """
     try:
-        # Инициализация клиента (делается один раз)
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        logger.info("Gemini API успешно сконфигурирован.")
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url=LOCAL_API_BASE_URL,
+            api_key=LOCAL_API_TOKEN,  # Используем токен из .env
+        )
+        logger.info(f"Локальный API успешно сконфигурирован: {LOCAL_API_BASE_URL}")
         return client
+    except ImportError:
+        logger.error("Библиотека openai не установлена. Установите: pip install openai")
+        raise
     except Exception as e:
-        logger.error(f"Ошибка конфигурации Gemini API: {e}", exc_info=True)
-        raise ValueError(f"Ошибка конфигурации: {e}")
+        logger.error(f"Ошибка конфигурации локального API: {e}", exc_info=True)
+        raise
+
+
+def parse_json_response(text: str) -> Tuple[Optional[str], Optional[Dict]]:
+    """
+    Парсит JSON-ответ от API.
+    Возвращает (rewritten_block, context_update) или (None, None) при ошибке.
+    """
+    import re
+
+    if not text:
+        return None, None
+
+    text = text.strip()
+
+    # Пытаемся распарсить как JSON
+    try:
+        # Убираем возможные markdown-блоки
+        if text.startswith("```"):
+            # Убираем обертку ```json ... ```
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+
+        data = json.loads(text)
+
+        # Ожидаем структуру {"rewritten_block": "...", "global_context": {...}}
+        rewritten_block = data.get("rewritten_block")
+        context_update = data.get("global_context")
+
+        return rewritten_block, context_update
+    except json.JSONDecodeError:
+        # Если это не JSON, возвращаем весь текст как rewritten_block
+        # (старый формат ответа - просто текст)
+        return text, None
 
 
 def list_available_models():
+    """Получает список моделей от локального API (OpenAI-совместимый)."""
     try:
-        # Используем клиент для получения списка моделей
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        models_list = client.models.list()
+        client = openai.OpenAI(
+            base_url=LOCAL_API_BASE_URL,
+            api_key=LOCAL_API_TOKEN
+        )
+
+        models_response = client.models.list()
         api_models = []
 
-        for model in models_list:
-            # В новой версии SDK атрибут называется supported_actions вместо supported_generation_methods
-            # Проверяем, поддерживает ли модель генерацию контента
-            if hasattr(model, 'supported_actions') and 'generateContent' in model.supported_actions:
-                model_name = model.name.split("/")[-1]
-                api_models.append(model_name)
-                logger.debug(f"Найдена модель: {model_name}")
+        for model in models_response:
+            model_id = getattr(model, 'id', str(model))
+            api_models.append(model_id)
+            logger.debug(f"Найдена модель: {model_id}")
 
         all_models = sorted(api_models)
 
         if all_models:
-            logger.info(f"Загружено {len(all_models)} моделей через API.")
-            logger.debug("Все доступные модели:\n" + "\n".join(all_models))
+            logger.info(f"Загружено {len(all_models)} моделей через локальный API.")
             return all_models
         else:
-            logger.warning("Не найдено доступных моделей через API, используем список по умолчанию.")
-            return []
+            logger.warning("Не найдено моделей через API, используем модель по умолчанию.")
+            return [LOCAL_MODEL_NAME]
 
     except Exception as e:
-        logger.error(f"Ошибка получения списка моделей через API: {e}")
-        return []
+        logger.warning(f"Ошибка получения списка моделей: {e}. Используем модель по умолчанию.")
+        return [LOCAL_MODEL_NAME]
 
 
 def count_chars(text: str) -> int:
@@ -303,57 +404,42 @@ def calculate_text_quality_metrics(original: str, rewritten: str) -> Dict[str, f
 
 
 def check_api_response(
-    response: types.GenerateContentResponse, context: str
+    response, context: str
 ) -> Tuple[Optional[str], Optional[str], bool, bool]:
     """
-    Проверяет ответ API и возвращает: (text, error, max_tokens, is_blocked)
-    is_blocked=True означает блокировку контента (PROHIBITED_CONTENT или SAFETY)
+    Проверяет ответ OpenAI-совместимого API и возвращает: (text, error, max_tokens, is_blocked)
     """
     text, error, max_tokens, is_blocked = None, None, False, False
 
-    if response.prompt_feedback and response.prompt_feedback.block_reason:
-        is_blocked = True
-        block_reason = response.prompt_feedback.block_reason.name
-        error = f"{context}: Промпт заблокирован ({block_reason})."
-        logger.warning(f"{error} Попытка fallback.")
-        return None, error, False, is_blocked
+    # Проверяем наличие ответа
+    if response is None:
+        error = f"{context}: Пустой ответ от API."
+        logger.error(error)
+        return None, error, False, False
 
-    if not response.candidates:
-        try:
-            text = response.text.strip()
-            if text:
-                logger.warning(
-                    f"{context}: Нет кандидатов, используется fallback текст ({count_chars(text)} симв.)."
-                )
-                return text, None, False, False
-            error = f"{context}: Нет кандидатов и пустой fallback текст."
-            logger.error(error)
-            return None, error, False, False
-        except Exception as e:
-            error = f"{context}: Ошибка получения текста: {e}."
-            logger.error(error)
-            return None, error, False, False
+    # Проверяем choices
+    if not response.choices:
+        error = f"{context}: Нет вариантов в ответе API."
+        logger.error(error)
+        return None, error, False, False
 
-    candidate = response.candidates[0]
-    finish_reason = getattr(candidate, "finish_reason", None)
-    finish_str = str(finish_reason) if finish_reason else ""
+    choice = response.choices[0]
 
-    # Check for blocking reasons (SAFETY, BLOCKLIST, PROHIBITED_CONTENT, RECITATION)
-    blocking_reasons = ["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "RECITATION", "BLOCK"]
-    if any(reason in finish_str for reason in blocking_reasons):
-        is_blocked = True
-        error = f"{context}: Ответ заблокирован фильтром безопасности ({finish_str})."
-        logger.warning(f"{error} Попытка fallback.")
-        return None, error, False, is_blocked
-    elif "MAX_TOKENS" in finish_str:
+    # Проверяем finish_reason
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason == "length":
         max_tokens = True
         logger.warning(f"{context}: Ответ усечен (MAX_TOKENS).")
+    elif finish_reason == "content_filter":
+        is_blocked = True
+        error = f"{context}: Ответ заблокирован фильтром безопасности."
+        logger.warning(f"{error} Попытка fallback.")
+        return None, error, False, is_blocked
 
+    # Извлекаем текст
     try:
-        if candidate.content and candidate.content.parts:
-            text = "".join(part.text for part in candidate.content.parts).strip()
-        elif response.text:
-            text = response.text.strip()
+        if choice.message and choice.message.content:
+            text = choice.message.content.strip()
         else:
             text = ""
         return text, None, max_tokens, False
@@ -458,9 +544,10 @@ def create_rewrite_prompt(
     prev_context: str,
     next_context: str,
     original_len: int,
+    global_context: "GlobalContext" = None,
 ) -> str:
     """
-    Создает промпт для переписывания.
+    Создает промпт для переписывания с поддержкой GlobalContext.
     Между маркерами передается ТОЛЬКО текст блока, контекст указывается отдельно.
     """
     min_len = int(original_len * MIN_REWRITE_LENGTH_RATIO)
@@ -478,7 +565,54 @@ def create_rewrite_prompt(
         if next_context:
             context_section += f"Next text: {next_context}..."
 
-    return f"""LITERARY EDITORIAL TASK: Professional book rewriting and adaptation
+    # Секция GlobalContext
+    global_context_section = ""
+    if global_context and (
+        global_context.characters or global_context.plot_points or global_context.themes
+    ):
+        context_json = json.dumps(
+            global_context.to_json(), ensure_ascii=False, indent=2
+        )
+        global_context_section = f"""
+CURRENT BOOK CONTEXT (for narrative coherence):
+{context_json}
+
+Update global_context in your JSON response if:
+- New characters appear in this block (add name + brief description)
+- New plot developments occur
+- New themes emerge
+- Style observations to remember
+"""
+
+    # Требование JSON-ответа (только если есть global_context)
+    json_format_section = ""
+    if global_context:
+        json_format_section = """
+RESPONSE FORMAT (JSON only, no other text):
+{
+    "rewritten_block": "Your rewritten text here...",
+    "global_context": {
+        "characters": [{"name": "CharacterName", "description": "Brief description"}],
+        "plot_points": [{"event": "What happened", "significance": "high|medium|low"}],
+        "themes": ["theme1"],
+        "style_notes": ["style observation"]
+    }
+}
+
+IMPORTANT:
+- Return ONLY valid JSON
+- Update global_context only if new information appears in this block
+- Preserve existing context data, only add new entries
+"""
+
+    # Формируем выходной формат в зависимости от наличия global_context
+    output_instruction = (
+        "7. Output ONLY the rewritten segment - no markers, no explanations"
+        if not global_context
+        else "7. Return valid JSON with rewritten_block and global_context fields"
+    )
+
+    return f"""{global_context_section}LITERARY EDITORIAL TASK: Professional book rewriting and adaptation
 
 This is a legitimate literary editing project. You are rewriting a segment from a book/manuscript to improve its quality, readability, and engagement while preserving the original narrative and meaning.
 
@@ -496,10 +630,10 @@ CRITICAL REQUIREMENTS:
 4. Ensure lexical diversity - avoid repeating words from original
 5. Maintain smooth transitions with surrounding context (if provided)
 6. Do NOT repeat any sentences from the context provided below
-7. Output ONLY the rewritten segment - no markers, no explanations
+{output_instruction}
 
 Text to rewrite:
-{text_with_markers}{context_section}"""
+{text_with_markers}{context_section}{json_format_section}"""
 
 
 def create_fallback_prompt(
@@ -687,7 +821,7 @@ def calculate_adaptive_temperature(
     return max(ADAPTIVE_TEMPERATURE_MIN, min(ADAPTIVE_TEMPERATURE_MAX, final_temp))
 
 
-def call_gemini_rewrite_api(
+def call_local_rewrite_api(
     client,
     system_instruction: str,
     user_content: str,
@@ -697,175 +831,136 @@ def call_gemini_rewrite_api(
     prev_block: str,
     next_block: str,
     stop_event: threading.Event,
+    global_context: "GlobalContext",
     failed_attempts: int = 0,
     previous_quality_metrics: Optional[Dict[str, float]] = None,
     language: str = "Русский",
     style: str = "",
     goal: str = "",
-) -> Optional[str]:
-    # Адаптивная температура на основе предыдущих попыток
+) -> Optional[Tuple[str, Dict]]:
+    """
+    Вызывает локальный LLM API для переписывания блока.
+    Возвращает (rewritten_block, context_update) или None при ошибке.
+    """
     adaptive_temp = calculate_adaptive_temperature(
         failed_attempts, previous_quality_metrics
     )
 
     if failed_attempts > 0:
         logger.debug(
-            f"Используется адаптивная температура: {adaptive_temp:.2f} (попыток: {failed_attempts})"
+            f"Адаптивная температура: {adaptive_temp:.2f} (попыток: {failed_attempts})"
         )
 
-    # Обновляем температуру перед каждой попыткой на основе текущих failed_attempts
-    current_failed_attempts = failed_attempts
-    last_quality_metrics = previous_quality_metrics
-    use_fallback = False
-    fallback_user_content = None
-
     for attempt in range(MAX_RETRIES):
-        # Проверяем флаг остановки перед каждой попыткой
         if stop_event and stop_event.is_set():
-            logger.warning("Получен сигнал остановки во время попыток вызова API.")
+            logger.warning("Получен сигнал остановки")
             return None
 
-        # Пересчитываем температуру для каждой попытки
         if attempt > 0:
             adaptive_temp = calculate_adaptive_temperature(
-                current_failed_attempts + attempt, last_quality_metrics
-            )
-            logger.debug(
-                f"Попытка {attempt + 1}: Адаптивная температура {adaptive_temp:.2f}"
+                failed_attempts + attempt, previous_quality_metrics
             )
 
         context = f"Попытка {attempt + 1}/{MAX_RETRIES}"
+        logger.info(f"Вызов локального API: {context}")
 
-        # Если используем fallback, создаем альтернативный промпт один раз
-        if (
-            use_fallback
-            and fallback_user_content is None
-            and language
-            and style
-            and goal
-        ):
-            logger.info(f"{context}: Использую fallback промпт для обхода блокировки")
-            fallback_user_content = create_fallback_prompt(
-                language, style, goal, original, prev_block, next_block, orig_len
-            )
-
-        # Выбираем какой контент отправлять
-        current_content = (
-            fallback_user_content
-            if use_fallback and fallback_user_content
-            else user_content
-        )
-
-        logger.info(f"Вызов API: {context}{' (fallback)' if use_fallback else ''}")
         try:
-            # В новой версии вызов выглядит так:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=current_content,
-                config=types.GenerateContentConfig(
-                    temperature=adaptive_temp,
-                    top_p=0.95,
-                    top_k=32,
-                    max_output_tokens=OUTPUT_TOKEN_LIMIT,
-                    system_instruction=system_instruction
-                )
+            # Используем requests вместо openai библиотеки для стабильности
+            import requests
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {LOCAL_API_TOKEN}"
+            }
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": adaptive_temp,
+                "top_p": 0.95,
+                "max_tokens": LOCAL_MAX_OUTPUT_TOKENS,
+                "stream": True,
+                # Отключаем reasoning для nemotron
+                "chat_template_kwargs": {"enable_thinking": False},
+                "reasoning_budget": 0
+            }
+            
+            response = requests.post(
+                f"{LOCAL_API_BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=300
             )
-            text, error, max_tokens, is_blocked = check_api_response(response, context)
+            response.raise_for_status()
+            
+            # Собираем streaming ответ
+            text = ""
+            for line in response.iter_lines():
+                if stop_event and stop_event.is_set():
+                    logger.warning(f"{context}: Остановлено во время streaming")
+                    return None
+                    
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        line = line[6:]
+                        if line == '[DONE]':
+                            break
+                        try:
+                            chunk = json.loads(line)
+                            delta = chunk.get('choices', [{}])[0].get('delta', {})
+                            if delta.get('content'):
+                                text += delta['content']
+                        except:
+                            pass
 
-            # Если контент заблокирован, активируем fallback для следующей попытки
-            if is_blocked and not use_fallback:
-                logger.warning(
-                    f"{context}: Контент заблокирован, следующая попытка будет использовать fallback"
-                )
-                use_fallback = True
+            if not text:
+                logger.error(f"{context}: Пустой ответ после streaming")
                 continue
 
-            if text is None:
-                logger.error(f"{context}: Ошибка API: {error}")
-                # Если даже fallback заблокирован, возможно блок слишком проблематичный
-                if is_blocked and use_fallback:
-                    logger.error(
-                        f"{context}: Fallback промпт также заблокирован. Пропуск блока."
-                    )
-                    return None
-            else:
-                # Валидация теперь происходит с учетом удаления маркеров внутри validate_rewritten_text
-                is_valid, validation_error, quality_metrics = validate_rewritten_text(
-                    text, original, orig_len, prev_block, next_block, context
+            # Парсим JSON-ответ
+            rewritten_block, context_update = parse_json_response(text)
+            if not rewritten_block:
+                logger.warning(f"{context}: Пустой rewritten_block")
+                continue
+
+            # Валидация
+            is_valid, validation_error, quality_metrics = validate_rewritten_text(
+                rewritten_block, original, orig_len, prev_block, next_block, context
+            )
+
+            if is_valid:
+                metrics_str = ""
+                if quality_metrics:
+                    metrics_str = f" (схожесть: {quality_metrics['similarity']:.3f})"
+                logger.info(
+                    f"{context}: Успешно ({count_chars(rewritten_block)} симв.){metrics_str}"
                 )
-                if is_valid:
-                    # Возвращаем текст *после* удаления маркеров, так как он прошел валидацию
-                    text_cleaned = text.replace(START_MARKER, "").replace(
-                        END_MARKER, ""
-                    )
-                    metrics_str = ""
-                    if quality_metrics:
-                        metrics_str = f" (схожесть: {quality_metrics['similarity']:.3f}, разнообразие: {quality_metrics['diversity']:.3f})"
-                    logger.info(
-                        f"{context}: Успешно переписан и валидирован блок ({count_chars(text_cleaned)} симв. после очистки){metrics_str}."
-                    )
-                    return text_cleaned  # Возвращаем очищенный текст
-                else:
-                    logger.warning(f"{context}: {validation_error}")
-                    # Сохраняем метрики для следующей попытки (адаптивная температура)
-                    if quality_metrics:
-                        last_quality_metrics = quality_metrics
+                return rewritten_block, context_update
+            else:
+                logger.warning(f"{context}: {validation_error}")
+                if quality_metrics:
+                    previous_quality_metrics = quality_metrics
+
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"{context}: Ошибка вызова API: {error_msg}")
+            logger.error(f"{context}: Ошибка API: {error_msg}")
 
-            # Проверяем на ошибку квоты (429) и извлекаем время ожидания
-            if "429" in error_msg and "retry_delay" in error_msg:
-                try:
-                    # Извлекаем время ожидания из сообщения об ошибке
-                    import re
+            # Обработка 502 Bad Gateway - credentials могут быть заняты
+            if "502" in error_msg or "Bad Gateway" in error_msg:
+                wait_time = min(30, RETRY_DELAY_SECONDS * (2 ** attempt))
+                logger.warning(f"{context}: 502 ошибка - ожидание {wait_time}с (credentials заняты)")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(wait_time)
+                continue
 
-                    retry_match = re.search(
-                        r"retry_delay\s*{\s*seconds:\s*(\d+)", error_msg
-                    )
-                    if retry_match:
-                        retry_seconds = int(retry_match.group(1))
-                        logger.warning(
-                            f"{context}: Достигнут лимит API. Ожидание {retry_seconds} секунд..."
-                        )
-
-                        # Проверяем остановку во время ожидания
-                        for wait_second in range(retry_seconds):
-                            if stop_event and stop_event.is_set():
-                                logger.warning(
-                                    "Получен сигнал остановки во время ожидания лимита API."
-                                )
-                                return None
-                            time.sleep(1)
-
-                        continue  # Пробуем снова после ожидания
-                except Exception as parse_error:
-                    logger.error(
-                        f"{context}: Не удалось извлечь время ожидания из ошибки: {parse_error}"
-                    )
-
-            # Если это не ошибка квоты или не удалось извлечь время, используем стандартную задержку
             if attempt < MAX_RETRIES - 1:
-                # Проверяем остановку во время стандартной задержки
-                for wait_second in range(RETRY_DELAY_SECONDS):
-                    if stop_event and stop_event.is_set():
-                        logger.warning(
-                            "Получен сигнал остановки во время стандартной задержки."
-                        )
-                        return None
-                    time.sleep(1)
+                time.sleep(RETRY_DELAY_SECONDS)
 
-        # Если это не ошибка квоты, используем стандартную задержку между попытками
-        if attempt < MAX_RETRIES - 1:
-            for wait_second in range(RETRY_DELAY_SECONDS):
-                if stop_event and stop_event.is_set():
-                    logger.warning(
-                        "Получен сигнал остановки во время задержки между попытками."
-                    )
-                    return None
-                time.sleep(1)
-
-    logger.error("Исчерпаны попытки переписывания.")
+    logger.error("Исчерпаны попытки переписывания")
     return None
 
 
@@ -969,14 +1064,17 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
     )
     logger.info(f"Возобновление: {resume}, Интервал сохранения: {save_interval}")
 
-    # Инициализация клиента Gemini
+    # Инициализация клиента локального API
     try:
-        client = configure_gemini()
+        client = configure_local_api()
     except Exception as e:
-        logger.error(f"Не удалось инициализировать Gemini API: {e}")
+        logger.error(f"Не удалось инициализировать локальный API: {e}")
         if progress_callback:
             progress_callback(0, 1)
         return
+
+    # Инициализация GlobalContext
+    global_context = GlobalContext()
 
     try:
         with open(input_file, "r", encoding="utf-8") as f:
@@ -1017,6 +1115,23 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                 logger.info(
                     f"Состояние и промежуточный текст ({count_chars(rewritten_text)} симв.) загружены. Возобновление с блока {processed_idx + 2}."
                 )
+
+                # Загрузка сохраненного GlobalContext
+                if "global_context" in state:
+                    try:
+                        gc_data = state["global_context"]
+                        global_context = GlobalContext(
+                            characters=gc_data.get("characters", []),
+                            plot_points=gc_data.get("plot_points", []),
+                            themes=gc_data.get("themes", []),
+                            style_notes=gc_data.get("style_notes", []),
+                        )
+                        logger.info(
+                            f"GlobalContext загружен: {len(global_context.characters)} персонажей, {len(global_context.plot_points)} событий"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Ошибка загрузки GlobalContext: {e}")
+
             except FileNotFoundError:
                 logger.warning(
                     f"Файл состояния найден, но промежуточный файл {intermediate_file} отсутствует. Начинаем заново."
@@ -1041,6 +1156,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                     "original_blocks_data": blocks,
                     "total_blocks": len(blocks),
                     "timestamp": time.time(),
+                    "global_context": global_context.to_json(),
                 },
             )
             processed_idx = -1
@@ -1110,6 +1226,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                     "original_blocks_data": blocks,
                     "total_blocks": total_blocks,
                     "timestamp": time.time(),
+                    "global_context": global_context.to_json(),
                 },
             )
             break
@@ -1177,13 +1294,14 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             prev_block_text,
             next_block_text,
             original_block_length,
+            global_context,
         )
 
         # Вызываем API с адаптивными параметрами
         block_failed_attempts = block.get("failed_attempts", 0)
         previous_quality = block.get("last_quality_metrics", None)
 
-        new_text = call_gemini_rewrite_api(
+        new_text = call_local_rewrite_api(
             client,
             system_instruction=current_system_instruction.format(
                 min_len=min_len_api, max_len=max_len_api
@@ -1195,6 +1313,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             prev_block=prev_block_text,  # Контекст до
             next_block=next_block_text,  # Контекст после
             stop_event=stop_event,
+            global_context=global_context,
             failed_attempts=block_failed_attempts,
             previous_quality_metrics=previous_quality,
             language=language,
@@ -1202,13 +1321,28 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             goal=goal,
         )
 
-        # Если API вернул None из-за лимита, делаем дополнительную паузу перед следующим блоком
+        # Если API вернул None из-за ошибки, делаем дополнительную паузу перед следующим блоком
         if new_text is None:
             logger.warning(
                 f"Блок {i+1}: Пропуск из-за ошибки API. Дополнительная пауза 10 секунд..."
             )
             time.sleep(10)
             continue
+
+        # Распаковываем результат (new_text, context_update)
+        result = new_text
+        if isinstance(result, tuple):
+            new_text, context_update = result
+        else:
+            context_update = None
+
+        # Обновление GlobalContext
+        if context_update:
+            global_context.update_from_response(context_update)
+            logger.info(
+                f"Блок {i+1}: GlobalContext обновлен ({len(global_context.characters)} персонажей, {len(global_context.plot_points)} событий)"
+            )
+
         # `new_text` теперь уже приходит без маркеров, если валидация прошла успешно
 
         if (
@@ -1266,6 +1400,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
                     "original_blocks_data": blocks,
                     "total_blocks": total_blocks,
                     "timestamp": time.time(),
+                    "global_context": global_context.to_json(),
                 },
             )
 
@@ -1291,6 +1426,7 @@ def rewrite_process(params: Dict, progress_callback=None, stop_event=None):
             "original_blocks_data": blocks,
             "total_blocks": total_blocks,
             "timestamp": time.time(),
+            "global_context": global_context.to_json(),
         },
     )
 
@@ -1407,7 +1543,7 @@ class BookRewriterApp:
         default_model = (
             REWRITER_MODEL_DEFAULT
             if available_models and REWRITER_MODEL_DEFAULT in available_models
-            else (available_models[0] if available_models else "gemini-1.5-flash")
+            else (available_models[0] if available_models else "nvidia/nvidia/nemotron-3-super-120b-a12b")
         )
         self.model_var = tk.StringVar(value=default_model)
         self.model_combobox = ttk.Combobox(
@@ -1547,17 +1683,17 @@ class BookRewriterApp:
             return
 
         try:
-            configure_gemini()
+            configure_local_api()
         except ValueError as e:
             messagebox.showerror(
                 "Ошибка конфигурации",
-                f"Не удалось настроить Gemini API:\n{e}\n\nПроверьте API-ключ (GOOGLE_API_KEY) в .env файле.",
+                f"Не удалось настроить локальный API:\n{e}\n\nПроверьте AUTH_TOKEN и OPENAI_BASE_URL в .env файле.",
             )
             return
         except Exception as e:
             messagebox.showerror(
                 "Ошибка конфигурации",
-                f"Непредвиденная ошибка при настройке Gemini API:\n{e}",
+                f"Непредвиденная ошибка при настройке локального API:\n{e}",
             )
             return
 
