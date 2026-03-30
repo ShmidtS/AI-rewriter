@@ -1,4 +1,15 @@
-protobuf
-python-dotenv
-sv_ttk
-google.genai
+# Core
+python-dotenv>=1.0.0
+requests>=2.31.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# GUI
+sv_ttk>=0.6.0
+
+# Web interface
+flask>=3.0.0
+werkzeug>=3.0.0
+
+# Optional: for test.py (Google Gemini direct)
+google-generativeai>=0.8.0

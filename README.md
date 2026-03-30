@@ -1,146 +1,122 @@
 # AI Book Rewriter
 
-Интеллектуальный инструмент для переписывания текстов с использованием Google Gemini API. Приложение позволяет автоматически переписывать/переводить большие тексты (книги, статьи).
+> Intelligent tool for rewriting large texts (books, articles) via a local LLM proxy.
+> Supports GUI and web interfaces, multilingual UI, multiple prompt presets.
 
-## Возможности
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
 
-- **Умное разбиение текста** - автоматическое разделение на блоки с учетом семантических границ (абзацы, предложения)
-- **Контекстное переписывание** - каждый блок переписывается с учетом контекста предыдущих и следующих блоков
-- **Адаптивная генерация** - автоматическая настройка параметров генерации для улучшения качества
-- **Валидация качества** - проверка на схожесть с оригиналом, длину, разнообразие лексики
-- **Возобновление работы** - сохранение прогресса и возможность продолжить с места остановки
-- **GUI интерфейс** - удобный графический интерфейс с темной темой
-- **Гибкие настройки** - настройка языка, стиля и цели переписывания
+---
 
-## Требования
+## 📚 Documentation
 
-- Python 3.8+
-- Google Gemini API ключ
+| Language | Documentation |
+|----------|---------------|
+| **English** | [README.md](docs/en/README.md) · [API Reference](docs/en/API.md) · [Prompt Guide](docs/en/PROMPTS.md) |
+| **Русский** | [README.md](docs/ru/README.md) · [API Справочник](docs/ru/API.md) · [Руководство по промптам](docs/ru/PROMPTS.md) |
+| **中文** | [README.md](docs/zh/README.md) · [API 参考](docs/zh/API.md) · [提示词指南](docs/zh/PROMPTS.md) |
 
-## Установка
+---
 
-1. Клонируйте репозиторий:
+## ✨ Features
+
+- **Smart block splitting** — semantic boundaries (paragraphs, sentences)
+- **Context-aware rewriting** — each block sees neighbouring blocks for smooth transitions
+- **Adaptive generation** — temperature auto-adjusted on quality failures
+- **Quality validation** — similarity, length ratio, lexical diversity checks
+- **Resume support** — saves progress, continues from last block
+- **GUI** — dark-theme tkinter desktop app
+- **Web UI** — Flask + SSE real-time progress, works in any browser
+- **Multilingual UI** — Russian / English / Chinese (中文)
+- **5 prompt presets** — Literary, Academic, Simplified, Creative, Translation
+- **Local proxy integration** — OpenAI-compatible API
+
+---
+
+## 🚀 Quick Start
+
 ```bash
+# Clone and setup
 git clone https://github.com/ShmidtS/AI-rewriter.git
 cd AI-rewriter
-```
-
-2. Создайте виртуальное окружение:
-```bash
 python -m venv .venv
-```
 
-3. Активируйте виртуальное окружение:
-
-Windows:
-```bash
+# Windows:
 .venv\Scripts\activate
-```
-
-Linux/Mac:
-```bash
+# Linux/Mac:
 source .venv/bin/activate
-```
 
-4. Установите зависимости:
-```bash
 pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your proxy settings
+
+# Run GUI (default)
+python main.py
+
+# Run Web UI
+python main.py --web
+# Open http://127.0.0.1:5000
 ```
 
-5. Создайте файл `.env` и добавьте ваш API ключ:
+---
+
+## 📖 Documentation Structure
+
+```
+docs/
+├── en/                     # English documentation
+│   ├── README.md           # Full documentation
+│   ├── API.md              # Web API reference
+│   └── PROMPTS.md          # Prompt presets guide
+│
+├── ru/                     # Russian documentation (Русский)
+│   ├── README.md           # Полная документация
+│   ├── API.md              # Справочник Web API
+│   └── PROMPTS.md          # Руководство по промптам
+│
+└── zh/                     # Chinese documentation (中文)
+    ├── README.md           # 完整文档
+    ├── API.md              # Web API 参考
+    └── PROMPTS.md          # 提示词预设指南
+```
+
+---
+
+## 🔧 Configuration
+
+Create `.env` from `.env.example`:
+
 ```env
-GOOGLE_API_KEY=your_api_key_here
+# Proxy URL (OpenAI-compatible)
+OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+
+# Auth token for the proxy
+AUTH_TOKEN=your-api-key
+
+# Default model
+MODEL=gemini/gemini-2.5-flash
+
+# UI language: ru / en / zh
+UI_LANG=en
 ```
 
-## Использование
+See [docs/en/README.md](docs/en/README.md) for full configuration options.
 
-### Запуск GUI приложения
+---
 
-```bash
-python aigen.py
-```
+## 📋 Requirements
 
-### Настройки в интерфейсе
+- Python 3.10+
+- Local LLM proxy running at `http://127.0.0.1:8000/v1` (OpenAI-compatible)
 
-1. **Входной файл** - выберите текстовый файл для переписывания
-2. **Выходной файл** - укажите путь для сохранения результата
-3. **Язык** - выберите язык переписывания
-4. **Стиль** - опишите желаемый стиль текста
-5. **Цель** - укажите цель переписывания
-6. **Модель** - выберите модель Gemini для использования
-7. **Возобновить** - продолжить с места остановки (если есть сохраненное состояние)
+---
 
-### Пример настроек
+## 📜 License
 
-**Стиль:**
-```
-Увлекательный и живой повествовательный стиль, схожий с оригиналом,
-но с улучшенной динамикой и более богатой лексикой.
-Избегать канцеляризмов и излишней формальности.
-```
+See [LICENSE](LICENSE) file for details.
 
-**Цель:**
-```
-Переписать сегмент, сохраняя основной смысл и сюжетную линию,
-но делая его более выразительным и интересным для современного читателя.
-Устранить возможные повторы и улучшить читаемость.
-```
+---
 
-## Архитектура
+## 👤 Author
 
-### Основные компоненты
-
-- **Разбиение текста** (`split_into_blocks`) - умное разделение на блоки с учетом семантики
-- **Создание промптов** (`create_rewrite_prompt`) - генерация промптов с контекстом
-- **Валидация** (`validate_rewritten_text`) - проверка качества переписанного текста
-- **API вызовы** (`call_gemini_rewrite_api`) - взаимодействие с Gemini API
-- **Управление состоянием** (`save_state`, `load_state`) - сохранение прогресса
-
-
-### Адаптивная генерация
-
-Система автоматически увеличивает температуру генерации при:
-- Высокой схожести с оригиналом
-- Низком разнообразии лексики
-- Повторных неудачных попытках
-
-## Файлы проекта
-
-- `aigen.py` - основной файл приложения
-- `requirements.txt` - зависимости проекта
-- `.env` - конфигурация (API ключи)
-
-### Генерируемые файлы
-
-- `*_rewrite_state.json` - состояние процесса переписывания
-- `*_intermediate.txt` - промежуточный результат
-- `*_final_rewritten.txt` - финальный результат
-
-## Конфигурация
-
-Основные параметры в `aigen.py`:
-
-```python
-BLOCK_TARGET_CHARS = 10000  # Целевой размер блока
-MIN_REWRITE_LENGTH_RATIO = 0.60  # Минимальное соотношение длин
-MAX_REWRITE_LENGTH_RATIO = 2.6  # Максимальное соотношение длин
-SIMILARITY_THRESHOLD = 0.95  # Порог схожести
-MAX_RETRIES = 20  # Максимум попыток
-```
-
-## Лицензия
-
-MIT License - см. файл [LICENSE](LICENSE)
-
-## Автор
-
-ShmidtS - [GitHub](https://github.com/ShmidtS)
-
-
-## Changelog
-
-### v1.0.0 (2025-01-30)
-- Первый публичный релиз
-- Адаптивная генерация
-- GUI интерфейс
-- Система валидации качества
+ShmidtS — [GitHub](https://github.com/ShmidtS)

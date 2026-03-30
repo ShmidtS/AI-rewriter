@@ -1,0 +1,9 @@
+{
+  "languages": {
+    "ru": "Русский",
+    "en": "English",
+    "zh": "中文"
+  },
+  "default": "ru",
+  "fallback": "en"
+}

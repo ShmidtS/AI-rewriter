@@ -186,3 +186,5 @@ AGENTS.md
 context_portal/
 .pydeploy_cache.json
 requirements.lock
+uploads/
+outputs/
