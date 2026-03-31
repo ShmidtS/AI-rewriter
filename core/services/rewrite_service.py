@@ -162,6 +162,8 @@ class RewriteService(IRewriteService):
                 progress_callback=self._internal_progress_callback,
                 stop_event=self._stop_event,
                 log_callback=self._internal_log_callback,
+                parallel=params.get("parallel", False),
+                max_workers=params.get("max_workers"),
             )
             
             # Update final status

@@ -44,5 +44,6 @@
   "error": "Ошибка",
   "network_error": "Ошибка сети",
   "output_file_placeholder": "Оставьте пустым для автогенерации",
-  "select_input_first": "Сначала выберите входной файл"
+  "select_input_first": "Сначала выберите входной файл",
+  "parallel_mode": "Параллельный режим (быстро)"
   }

@@ -44,5 +44,6 @@
   "error": "Error",
   "network_error": "Network error",
   "output_file_placeholder": "Leave empty for auto-generation",
-  "select_input_first": "Please select input file first"
-  }
+  "select_input_first": "Please select input file first",
+  "parallel_mode": "Parallel mode (fast)"
+}

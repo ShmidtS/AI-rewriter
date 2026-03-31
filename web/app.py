@@ -165,6 +165,7 @@ def api_start():
         goal=request.form.get("goal", ""),
         model=request.form.get("model", ""),
         resume=request.form.get("resume", "true").lower() == "true",
+        parallel=request.form.get("parallel_mode", "false").lower() == "true",
         save_interval=1,
         prompt_preset=request.form.get("prompt_preset", "literary"),
     )

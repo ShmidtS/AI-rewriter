@@ -13,10 +13,16 @@
   - [POST /api/start](#post-apistart)
   - [POST /api/stop](#post-apistop)
   - [GET /api/status](#get-apistatus)
+  - [GET /api/models](#get-apimodels)
   - [GET /api/prompts](#get-apiprompts)
-  - [GET /api/i18n/<lang>.json](#get-apii18nlangjson)
+  - [GET /api/prompts/<prompt_id>](#get-apipromptsprompt_id)
+  - [GET /api/prompts/categories](#get-apipromptscategories)
   - [GET /api/output-languages](#get-apioutput-languages)
+  - [GET /api/download/<filename>](#get-apidownloadfilename)
+  - [GET /api/i18n/<lang>.json](#get-apii18nlangjson)
   - [GET /events](#get-events)
+- [语言强制](#语言强制)
+- [并行模式](#并行模式)
 - [错误处理](#错误处理)
 - [示例](#示例)
 
@@ -72,6 +78,8 @@ http://<主机>:<端口>
 | `style` | String | 否 | 附加风格说明 |
 | `goal` | String | 否 | 附加目标说明 |
 | `resume` | Boolean | 否 | 从上次位置继续（默认：`true`） |
+| `output_file` | String | 否 | 自定义输出文件名（如不提供则自动生成） |
+| `parallel_mode` | Boolean | 否 | 启用并行块处理以加快重写（默认：`false`） |
 
 **响应**
 
@@ -163,21 +171,161 @@ http://<主机>:<端口>
 
 ---
 
+### GET /api/models
+
+获取代理中可用的 LLM 模型列表。
+
+**响应**
+
+```json
+["gemini/gemini-2.5-flash", "colin/gpt-5.4", "openai/gpt-4o"]
+```
+
+---
+
 ### GET /api/prompts
 
-获取可用的提示词预设。
+获取所有带本地化名称和描述的提示词预设。
+
+**查询参数**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `lang` | String | 否 | 本地化语言代码（默认：`en`） |
 
 **响应**
 
 ```json
 {
-  "literary": "文学编辑",
-  "academic": "学术风格",
-  "simplified": "简化",
-  "creative": "创意增强",
-  "translation": "翻译与改编"
+  "prompts": [
+    {
+      "id": "literary",
+      "name": "文学编辑",
+      "description": "专业文学编辑，保留原意并改文风",
+      "category": "editing",
+      "preview": "书籍和小说文学编辑"
+    }
+  ]
 }
 ```
+
+---
+
+### GET /api/prompts/<prompt_id>
+
+通过 ID 获取特定提示词的本地化内容。
+
+**参数**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `prompt_id` | String | 是 | 提示词 ID：`literary`、`academic`、`simplified`、`creative`、`translation` |
+
+**查询参数**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `lang` | String | 否 | 本地化语言代码（默认：`en`） |
+
+**状态码**
+
+| 代码 | 描述 |
+|------|------|
+| 200 | 找到提示词 |
+| 404 | 未找到提示词 |
+
+---
+
+### GET /api/prompts/categories
+
+获取所有带本地化名称的提示词类别。
+
+**查询参数**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `lang` | String | 否 | 本地化语言代码（默认：`en`） |
+
+**响应**
+
+```json
+{
+  "categories": [
+    {"id": "editing", "name": "编辑"},
+    {"id": "adaptation", "name": "改编"},
+    {"id": "enhancement", "name": "增强"},
+    {"id": "translation", "name": "翻译"}
+  ]
+}
+```
+
+---
+
+### GET /api/output-languages
+
+获取支持的输出语言列表。
+
+**响应**
+
+```json
+{
+  "languages": [
+    {"code": "ru", "name": "Русский"},
+    {"code": "en", "name": "English"},
+    {"code": "zh", "name": "中文"},
+    {"code": "de", "name": "Deutsch"},
+    {"code": "fr", "name": "Francais"},
+    {"code": "es", "name": "Espanol"},
+    {"code": "ja", "name": "日本語"},
+    {"code": "ko", "name": "한국어"}
+  ]
+}
+```
+
+---
+
+### GET /api/download/<filename>
+
+下载已完成的改写结果文件。
+
+**参数**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `filename` | String | 是 | outputs 目录中的输出文件名 |
+
+**响应**
+
+二进制文件下载，带有 `Content-Disposition: attachment` 头。
+
+**状态码**
+
+| 代码 | 描述 |
+|------|------|
+| 200 | 文件下载成功 |
+| 404 | 文件未找到 |
+
+---
+
+### 语言强制
+
+所有提示词预设都包含**严格语言强制块**，在运行时基于所选输出语言注入：
+
+- 模型**仅**以指定语言输出文本
+- 不会意外翻译成英语或其他语言
+- 即使输入语言不同，输出仍保持一致
+- 输出中的每个词都必须匹配目标语言
+
+这对"翻译"预设至关重要。
+
+### 并行模式
+
+`POST /api/start` 的 `parallel_mode` 参数启用并发的块处理：
+
+- **`parallel_mode=false`**（默认）：顺序处理，一次一个块
+- **`parallel_mode=true`**：多个块同时处理
+
+并行模式推荐用于大型文档（书籍、长文章）以缩短总处理时间。
 
 ---
 

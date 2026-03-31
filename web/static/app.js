@@ -543,9 +543,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             
             const fd = new FormData(form);
-            // Ensure checkbox value is included
+            // Ensure checkbox values are included
             if (!fd.get('resume')) fd.set('resume', 'false');
             else fd.set('resume', 'true');
+            if (!fd.get('parallel_mode')) fd.set('parallel_mode', 'false');
+            else fd.set('parallel_mode', 'true');
 
             // Show loading state
             const startBtn = document.getElementById('start-btn');

@@ -130,7 +130,13 @@ IMPORTANT: Return ONLY valid JSON. Update global_context only if new info appear
         else "7. Return valid JSON with rewritten_block and global_context fields"
     )
 
-    return f"""{global_context_section}LITERARY EDITORIAL TASK: Professional book rewriting and adaptation
+    return f"""{global_context_section}LANGUAGE ENFORCEMENT (CRITICAL):
+- Output language MUST be: {language}
+- NEVER output in any other language
+- Every sentence, every word must be in {language}
+- Even if you think another language would be better, use {language}
+
+LITERARY EDITORIAL TASK: Professional book rewriting and adaptation
 
 Task: Rewrite the marked text segment
 

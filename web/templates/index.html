@@ -96,6 +96,14 @@
           </label>
         </div>
 
+        <div class="form-row">
+          <label>{{ tr('parallel_mode') }}</label>
+          <label class="toggle">
+            <input type="checkbox" name="parallel_mode" id="parallel_mode">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
         <div class="form-actions">
           <button type="submit" id="start-btn" class="btn btn-primary">&#9654; {{ tr('start') }}</button>
           <button type="button" id="stop-btn" class="btn btn-danger" disabled onclick="stopJob()">&#9646;&#9646; {{ tr('stop') }}</button>

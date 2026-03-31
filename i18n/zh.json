@@ -44,5 +44,6 @@
   "error": "错误",
   "network_error": "网络错误",
   "output_file_placeholder": "留空自动生成",
-  "select_input_first": "请先选择输入文件"
+  "select_input_first": "请先选择输入文件",
+  "parallel_mode": "并行模式（快速）"
   }

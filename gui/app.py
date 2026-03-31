@@ -186,6 +186,13 @@ class BookRewriterApp:
         self._widgets["resume_lbl"] = lbl_re
         ttk.Checkbutton(parent, variable=self.resume_var).grid(row=7, column=1, sticky=tk.W, padx=6, pady=3)
 
+        # Parallel mode
+        self.parallel_var = tk.BooleanVar(value=False)
+        lbl_pa = ttk.Label(parent, text=tr("parallel_mode"))
+        lbl_pa.grid(row=8, column=0, sticky=tk.W, padx=6, pady=3)
+        self._widgets["parallel_mode_lbl"] = lbl_pa
+        ttk.Checkbutton(parent, variable=self.parallel_var).grid(row=8, column=1, sticky=tk.W, padx=6, pady=3)
+
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _refresh_models(self):
@@ -251,7 +258,7 @@ class BookRewriterApp:
         # Update visible labels
         label_keys = [
             "input_file", "output_file", "language", "model", "prompt_preset",
-            "style", "goal", "resume",
+            "style", "goal", "resume", "parallel_mode",
         ]
         for k in label_keys:
             w = self._widgets.get(k + "_lbl")
@@ -292,6 +299,7 @@ class BookRewriterApp:
             goal=self.goal_text.get("1.0", tk.END).strip(),
             model=self.model_var.get(),
             resume=self.resume_var.get(),
+            parallel=self.parallel_var.get(),
             save_interval=1,
             prompt_preset=self.preset_var.get(),
         )

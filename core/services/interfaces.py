@@ -6,6 +6,7 @@ Defines contracts for:
 - IModelProvider: Model discovery and validation
 - IProgressReporter: Progress and status reporting
 """
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -15,6 +16,7 @@ import threading
 
 class RewriteStatus(str, Enum):
     """Status of a rewrite job."""
+
     IDLE = "idle"
     RUNNING = "running"
     STOPPING = "stopping"
@@ -26,6 +28,7 @@ class RewriteStatus(str, Enum):
 @dataclass
 class ProgressInfo:
     """Progress information for a rewrite job."""
+
     current: int = 0
     total: int = 0
     status: RewriteStatus = RewriteStatus.IDLE
@@ -62,6 +65,7 @@ class ProgressInfo:
 @dataclass
 class RewriteParams:
     """Parameters for a rewrite job."""
+
     input_file: str
     output_file: str
     language: str = "Русский"
@@ -73,6 +77,8 @@ class RewriteParams:
     prompt_preset: str = "literary"
     base_url: Optional[str] = None
     token: Optional[str] = None
+    parallel: bool = False
+    max_workers: Optional[int] = 10
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for legacy rewrite_process compatibility."""
@@ -88,6 +94,8 @@ class RewriteParams:
             "prompt_preset": self.prompt_preset,
             "base_url": self.base_url,
             "token": self.token,
+            "parallel": self.parallel,
+            "max_workers": self.max_workers,
         }
 
 
@@ -105,7 +113,9 @@ class IProgressReporter(ABC):
         pass
 
     @abstractmethod
-    def report_status(self, status: RewriteStatus, message: Optional[str] = None) -> None:
+    def report_status(
+        self, status: RewriteStatus, message: Optional[str] = None
+    ) -> None:
         """Report status change."""
         pass
 
@@ -122,7 +132,7 @@ class IModelProvider(ABC):
     def validate_connection(self) -> tuple[bool, str]:
         """
         Validate connection to the API.
-        
+
         Returns:
             Tuple of (success, message) where message contains error details if failed.
         """
@@ -146,12 +156,12 @@ class IRewriteService(ABC):
     ) -> bool:
         """
         Start a rewrite job.
-        
+
         Args:
             params: Rewrite parameters
             progress_callback: Optional callback for progress updates
             log_callback: Optional callback for log messages
-            
+
         Returns:
             True if job started successfully, False otherwise
         """
@@ -181,10 +191,10 @@ class IRewriteService(ABC):
     def wait_completion(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for the current job to complete.
-        
+
         Args:
             timeout: Maximum time to wait in seconds, None for indefinite
-            
+
         Returns:
             True if job completed, False if timeout reached
         """

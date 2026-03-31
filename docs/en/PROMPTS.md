@@ -7,6 +7,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Language Enforcement](#language-enforcement)
 - [Available Presets](#available-presets)
   - [Literary Editor](#literary-editor-literary)
   - [Academic Style](#academic-style-academic)
@@ -24,9 +25,22 @@
 AI-rewriter provides 5 built-in prompt presets, each optimized for specific text types and rewriting goals. Each preset includes:
 
 - **System prompt** — Instructions for the LLM on how to rewrite
-- **Localized name** — Display name in UI (EN/RU/ZH)
+- **Localized name** — Display name in UI (EN, RU, ZH with all 8 output language labels)
 - **Category** — Grouping for UI organization
 - **Tags** — Keywords for search and filtering
+- **Language enforcement** — Strict output language control injected at runtime
+
+## Language Enforcement
+
+Every preset contains a **strict language enforcement block** that is injected at runtime based on the selected output language from 8 supported options (RU, EN, ZH, DE, FR, ES, JA, KO). The block instructs the model:
+
+- Output text **ONLY** in the specified language
+- **NEVER** use any other language
+- Do NOT translate to English, Chinese, Russian, or any other language
+- Even if input is in a different language, output MUST stay in the target language
+- Every single word must be in the target language
+
+This is critical for the **Translation** preset, where the source text language differs from the desired output language.
 
 ---
 

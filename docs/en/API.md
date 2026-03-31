@@ -13,10 +13,16 @@
   - [POST /api/start](#post-apistart)
   - [POST /api/stop](#post-apistop)
   - [GET /api/status](#get-apistatus)
+  - [GET /api/models](#get-apimodels)
   - [GET /api/prompts](#get-apiprompts)
-  - [GET /api/i18n/<lang>.json](#get-apii18nlangjson)
+  - [GET /api/prompts/<prompt_id>](#get-apipromptsprompt_id)
+  - [GET /api/prompts/categories](#get-apipromptscategories)
   - [GET /api/output-languages](#get-apioutput-languages)
+  - [GET /api/download/<filename>](#get-apidownloadfilename)
+  - [GET /api/i18n/<lang>.json](#get-apii18nlangjson)
   - [GET /events](#get-events)
+- [Language Enforcement](#language-enforcement)
+- [Parallel Mode](#parallel-mode)
 - [Error Handling](#error-handling)
 - [Examples](#examples)
 
@@ -72,6 +78,8 @@ Start a new rewrite job.
 | `style` | String | No | Additional style instructions |
 | `goal` | String | No | Additional goal instructions |
 | `resume` | Boolean | No | Resume from last position (default: `true`) |
+| `output_file` | String | No | Custom output filename (auto-generated if not provided) |
+| `parallel_mode` | Boolean | No | Enable parallel block processing for faster rewrites (default: `false`) |
 
 **Response**
 
@@ -163,21 +171,161 @@ Get the current job status.
 
 ---
 
+### GET /api/models
+
+Get the list of available LLM models from the proxy.
+
+**Response**
+
+```json
+["gemini/gemini-2.5-flash", "colin/gpt-5.4", "openai/gpt-4o"]
+```
+
+---
+
 ### GET /api/prompts
 
-Get available prompt presets.
+Get all prompts with localized names and descriptions.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lang` | String | No | Language code for localization (default: `en`) |
 
 **Response**
 
 ```json
 {
-  "literary": "Literary Editor",
-  "academic": "Academic Style",
-  "simplified": "Simplified",
-  "creative": "Creative Enhancement",
-  "translation": "Translation with Adaptation"
+  "prompts": [
+    {
+      "id": "literary",
+      "name": "Literary Editor",
+      "description": "Professional literary editing preserving meaning while improving style",
+      "category": "editing",
+      "preview": "Literary editor for books and fiction"
+    }
+  ]
 }
 ```
+
+---
+
+### GET /api/prompts/<prompt_id>
+
+Get a specific prompt by ID with localized content.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt_id` | String | Yes | Prompt ID: `literary`, `academic`, `simplified`, `creative`, `translation` |
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lang` | String | No | Language code for localization (default: `en`) |
+
+**Status Codes**
+
+| Code | Description |
+|------|-------------|
+| 200 | Prompt found |
+| 404 | Prompt not found |
+
+---
+
+### GET /api/prompts/categories
+
+Get all prompt categories with localized names.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lang` | String | No | Language code for localization (default: `en`) |
+
+**Response**
+
+```json
+{
+  "categories": [
+    {"id": "editing", "name": "Editing"},
+    {"id": "adaptation", "name": "Adaptation"},
+    {"id": "enhancement", "name": "Enhancement"},
+    {"id": "translation", "name": "Translation"}
+  ]
+}
+```
+
+---
+
+### GET /api/output-languages
+
+Get the list of supported output/translation languages.
+
+**Response**
+
+```json
+{
+  "languages": [
+    {"code": "ru", "name": "Русский"},
+    {"code": "en", "name": "English"},
+    {"code": "zh", "name": "中文"},
+    {"code": "de", "name": "Deutsch"},
+    {"code": "fr", "name": "Francais"},
+    {"code": "es", "name": "Espanol"},
+    {"code": "ja", "name": "日本語"},
+    {"code": "ko", "name": "한국어"}
+  ]
+}
+```
+
+---
+
+### GET /api/download/<filename>
+
+Download a completed rewrite output file.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `filename` | String | Yes | Name of the output file in the outputs directory |
+
+**Response**
+
+Binary file download with `Content-Disposition: attachment` header.
+
+**Status Codes**
+
+| Code | Description |
+|------|-------------|
+| 200 | File downloaded successfully |
+| 404 | File not found |
+
+---
+
+### Language Enforcement
+
+All prompt presets include a strict language enforcement block injected at runtime. When you specify a language via the `language` form parameter, the system injects explicit instructions into the system prompt:
+
+- Output MUST be only in the specified language
+- No translation to any other language
+- Every word must match the target language
+- Even if input is in a different language, output stays in the requested language
+
+This is critical for maintaining consistent output, especially with the Translation preset.
+
+### Parallel Mode
+
+The `parallel_mode` parameter on `POST /api/start` enables concurrent block processing:
+
+- **`parallel_mode=false`** (default): Sequential processing, one block at a time
+- **`parallel_mode=true`**: Multiple blocks processed concurrently
+
+Parallel mode is recommended for large documents (books, long articles) to reduce total processing time. The API returns the same response format regardless of mode.
 
 ---
 

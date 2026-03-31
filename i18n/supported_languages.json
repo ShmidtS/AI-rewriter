@@ -2,7 +2,12 @@
   "languages": {
     "ru": "Русский",
     "en": "English",
-    "zh": "中文"
+    "zh": "中文",
+    "de": "Deutsch",
+    "fr": "Français",
+    "es": "Español",
+    "ja": "日本語",
+    "ko": "한국어"
   },
   "default": "ru",
   "fallback": "en"

@@ -1,7 +1,7 @@
 # AI Book Rewriter
 
 > Intelligent tool for rewriting large texts (books, articles) via a local LLM proxy.
-> Supports GUI and web interfaces, multilingual UI, multiple prompt presets.
+> Supports GUI and web interfaces, multilingual UI, multiple prompt presets, parallel processing.
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
@@ -27,8 +27,10 @@
 - **Resume support** — saves progress, continues from last block
 - **GUI** — dark-theme tkinter desktop app
 - **Web UI** — Flask + SSE real-time progress, works in any browser
-- **Multilingual UI** — Russian / English / Chinese (中文)
+- **Multilingual UI** — 8 languages: RU, EN, ZH, DE, FR, ES, JA, KO
 - **5 prompt presets** — Literary, Academic, Simplified, Creative, Translation
+- **Parallel processing** — optional parallel mode for faster rewriting of large documents (enable via Web UI "Parallel mode" checkbox)
+- **Extended language support** — output text in any of 8 supported languages with strict language enforcement via prompt injection
 - **Local proxy integration** — OpenAI-compatible API
 
 ---
@@ -99,6 +101,25 @@ MODEL=gemini/gemini-2.5-flash
 # UI language: ru / en / zh
 UI_LANG=en
 ```
+
+### Supported UI & Output Languages
+
+| Code | Language |
+|------|----------|
+| `ru` | Русский (Russian) |
+| `en` | English |
+| `zh` | 中文 (Chinese) |
+| `de` | Deutsch (German) |
+| `fr` | Français (French) |
+| `es` | Español (Spanish) |
+| `ja` | 日本語 (Japanese) |
+| `ko` | 한국어 (Korean) |
+
+**Language enforcement:** Every prompt preset injects a strict language instruction into the system prompt. The LLM is explicitly told to output ONLY in the specified language and never deviate. This ensures consistent output regardless of input language.
+
+### Parallel Processing
+
+For large documents, enable **parallel mode** via the "Parallel mode" toggle in the Web UI (`python main.py --web`). This processes multiple text blocks concurrently, significantly reducing total rewrite time for books and long documents.
 
 See [docs/en/README.md](docs/en/README.md) for full configuration options.
 
