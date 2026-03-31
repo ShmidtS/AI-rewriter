@@ -9,11 +9,13 @@
 <body>
   <!-- Toast Container -->
   <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
-  
+
   <nav class="navbar">
     <div class="navbar-brand">&#9997; {{ tr('app_title') }}</div>
     <div class="navbar-right">
+      <span id="sse-status" class="badge badge-ok" title="SSE status">SSE: OK</span>
       <span id="conn-status" class="badge badge-ok">{{ tr('web_connect_status') }}</span>
+      <button type="button" id="theme-toggle" class="btn btn-sm btn-secondary" title="Toggle light/dark theme" aria-label="Toggle theme">&#9790;</button>
       <div class="lang-switcher">
         {% for code, name in supported_langs.items() %}
           <a href="?lang={{ code }}" class="lang-btn {% if lang == code %}active{% endif %}">{{ name }}</a>
@@ -30,28 +32,30 @@
         <input type="hidden" name="lang" value="{{ lang }}">
 
         <div class="form-row">
-        <label>{{ tr('input_file') }}</label>
-        <div class="file-input-wrap">
-        <input type="file" id="input_file" name="input_file" accept=".txt" required>
-        <span id="file-name" class="file-name-display">—</span>
+          <label>{{ tr('input_file') }}</label>
+          <div class="file-input-wrap">
+            <input type="file" id="input_file" name="input_file" accept=".txt" required>
+            <span id="file-name" class="file-name-display">&mdash;</span>
+            <button type="button" class="clear-btn-inline" data-target="input_file" title="Clear selection" onclick="document.getElementById('input_file').value='';document.getElementById('file-name').textContent='&mdash;'">&#10005;</button>
+          </div>
         </div>
-        </div>
-        
+
         <div class="form-row">
-        <label>{{ tr('output_file') }}</label>
-        <div class="file-input-wrap">
-        <input type="text" id="output_file" name="output_file" placeholder="{{ tr('output_file_placeholder') }}">
-        <button type="button" class="btn btn-sm btn-secondary" onclick="suggestOutputName()">&#8634;</button>
+          <label>{{ tr('output_file') }}</label>
+          <div class="file-input-wrap">
+            <input type="text" id="output_file" name="output_file" placeholder="{{ tr('output_file_placeholder') }}">
+            <button class="clear-btn-inline" data-target="output_file" title="Clear" onclick="document.getElementById('output_file').value=''">&#10005;</button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="suggestOutputName()">&#8634;</button>
+          </div>
         </div>
-        </div>
-        
+
         <div class="form-row">
-        <label>{{ tr('language') }}</label>
-          <select name="language" id="language">
-            {% for lang_opt in output_languages %}
-              <option value="{{ lang_opt }}" {% if lang_opt == 'Русский' %}selected{% endif %}>{{ lang_opt }}</option>
-            {% endfor %}
-          </select>
+          <label>{{ tr('language') }}</label>
+            <select name="language" id="language">
+              {% for lang_opt in output_languages %}
+                <option value="{{ lang_opt }}" {% if lang_opt == '\u0420\u0443\u0441\u0441\u043a\u0438\u0439' %}selected{% endif %}>{{ lang_opt }}</option>
+              {% endfor %}
+            </select>
         </div>
 
         <div class="form-row">
@@ -65,27 +69,35 @@
         </div>
 
         <div class="form-row">
-        <label>{{ tr('prompt_preset') }}</label>
-        <select name="prompt_preset" id="prompt_preset">
-        {% for key, label in presets.items() %}
-        <option value="{{ key }}">{{ label }}</option>
-        {% endfor %}
-        </select>
+          <label>{{ tr('prompt_preset') }}</label>
+          <div class="prompt-select-wrap">
+            <select name="prompt_preset" id="prompt_preset">
+              {% for key, label in presets.items() %}
+                <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
         </div>
-        
+
         <div class="form-row" id="prompt-preview-row">
-        <label></label>
-        <div id="prompt-preview" class="prompt-preview"></div>
+          <label></label>
+          <div id="prompt-preview" class="prompt-preview"></div>
         </div>
 
         <div class="form-row align-top">
           <label>{{ tr('style') }}</label>
-          <textarea name="style" id="style" rows="3" placeholder="{{ tr('default_style') }}">{{ tr('default_style') }}</textarea>
+          <div class="clearable-wrap">
+            <textarea name="style" id="style" rows="3" placeholder="{{ tr('default_style') }}">{{ tr('default_style') }}</textarea>
+            <button type="button" class="clear-btn" data-target="style" title="Clear">&#10005;</button>
+          </div>
         </div>
 
         <div class="form-row align-top">
           <label>{{ tr('goal') }}</label>
-          <textarea name="goal" id="goal" rows="4" placeholder="{{ tr('default_goal') }}">{{ tr('default_goal') }}</textarea>
+          <div class="clearable-wrap">
+            <textarea name="goal" id="goal" rows="4" placeholder="{{ tr('default_goal') }}">{{ tr('default_goal') }}</textarea>
+            <button type="button" class="clear-btn" data-target="goal" title="Clear">&#10005;</button>
+          </div>
         </div>
 
         <div class="form-row">
@@ -109,6 +121,16 @@
           <button type="button" id="stop-btn" class="btn btn-danger" disabled onclick="stopJob()">&#9646;&#9646; {{ tr('stop') }}</button>
         </div>
       </form>
+    </div>
+
+    <!-- Prompt Presets Card -->
+    <div class="prompts-card" id="prompts-card" style="display:none;">
+      <div class="prompts-header">
+        <span>&#128214; Prompt Presets</span>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="loadPromptPresets()" title="Refresh">&#8635;</button>
+      </div>
+      <div class="category-filter" id="category-filter"></div>
+      <div class="prompts-body" id="prompts-grid"></div>
     </div>
 
     <!-- Progress Card -->

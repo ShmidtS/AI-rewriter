@@ -8,10 +8,10 @@ Defines contracts for:
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional, Callable, Any
-import threading
+from typing import Any
 
 
 class RewriteStatus(str, Enum):
@@ -34,7 +34,7 @@ class ProgressInfo:
     status: RewriteStatus = RewriteStatus.IDLE
     filename: str = ""
     output_name: str = ""
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     @property
     def percentage(self) -> float:
@@ -48,7 +48,7 @@ class ProgressInfo:
         """Check if job is currently running."""
         return self.status == RewriteStatus.RUNNING
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "current": self.current,
@@ -75,12 +75,12 @@ class RewriteParams:
     resume: bool = True
     save_interval: int = 1
     prompt_preset: str = "literary"
-    base_url: Optional[str] = None
-    token: Optional[str] = None
+    base_url: str | None = None
+    token: str | None = None
     parallel: bool = False
-    max_workers: Optional[int] = 10
+    max_workers: int | None = 10
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for legacy rewrite_process compatibility."""
         return {
             "input_file": self.input_file,
@@ -113,9 +113,7 @@ class IProgressReporter(ABC):
         pass
 
     @abstractmethod
-    def report_status(
-        self, status: RewriteStatus, message: Optional[str] = None
-    ) -> None:
+    def report_status(self, status: RewriteStatus, message: str | None = None) -> None:
         """Report status change."""
         pass
 
@@ -151,8 +149,8 @@ class IRewriteService(ABC):
     def start_rewrite(
         self,
         params: RewriteParams,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        log_callback: Optional[Callable[[str], None]] = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+        log_callback: Callable[[str], None] | None = None,
     ) -> bool:
         """
         Start a rewrite job.
@@ -188,7 +186,7 @@ class IRewriteService(ABC):
         pass
 
     @abstractmethod
-    def wait_completion(self, timeout: Optional[float] = None) -> bool:
+    def wait_completion(self, timeout: float | None = None) -> bool:
         """
         Wait for the current job to complete.
 

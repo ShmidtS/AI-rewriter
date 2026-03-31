@@ -4,19 +4,17 @@ Multiple preset styles supported.
 
 This module provides backward-compatible API while using the new prompt catalog.
 """
-import json
-from typing import Optional
 
-from core.config import START_MARKER, END_MARKER, MIN_REWRITE_LENGTH_RATIO, MAX_REWRITE_LENGTH_RATIO
+import json
+
+from core.config import END_MARKER, MAX_REWRITE_LENGTH_RATIO, MIN_REWRITE_LENGTH_RATIO, START_MARKER
 
 # Import from new catalog module for backward compatibility
 from prompts import (
     get_all_prompt_names,
-    get_prompt_template,
-    get_prompt_name,
     get_all_prompts as _get_catalog_prompts,
+    get_prompt_template,
 )
-
 
 # Lazy-loaded legacy presets for backward compatibility
 _SYSTEM_PROMPT_PRESETS_CACHE = None
@@ -44,7 +42,7 @@ SYSTEM_PROMPT_PRESETS = property(lambda self: _get_legacy_presets())
 def get_system_prompt(preset_key: str, min_len: int = 0, max_len: int = 0) -> str:
     """
     Returns the formatted system prompt for the given preset.
-    
+
     Backward-compatible function that now uses the prompt catalog.
     """
     template = get_prompt_template(preset_key)
@@ -53,7 +51,7 @@ def get_system_prompt(preset_key: str, min_len: int = 0, max_len: int = 0) -> st
         template = get_prompt_template("literary")
         if template is None:
             return ""
-    
+
     # Format the template with markers and length parameters
     formatted = template.format(
         START_MARKER=START_MARKER,
@@ -61,14 +59,14 @@ def get_system_prompt(preset_key: str, min_len: int = 0, max_len: int = 0) -> st
         min_len=min_len,
         max_len=max_len,
     )
-    
+
     return formatted
 
 
 def get_preset_names(lang: str = "en") -> dict:
     """
     Returns {key: display_name} for all presets in the given language.
-    
+
     Backward-compatible function that now uses the prompt catalog.
     """
     return get_all_prompt_names(lang)

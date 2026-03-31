@@ -21,6 +21,7 @@ from core.services.rewrite_service import get_rewrite_service
 from core.services.model_provider import get_model_provider
 from core.prompts import get_preset_names
 from core.config import FINAL_SUFFIX
+from core.settings import get_settings, reload_settings
 from i18n import tr, set_language, get_supported_languages, get_output_languages
 from core.services.prompt_service import get_prompt_service
 
@@ -102,6 +103,8 @@ def index():
     set_language(lang)
     models = _model_provider.get_available_models() if _model_provider else []
     presets = get_preset_names(lang)
+    prompt_svc = get_prompt_service()
+    categories = [c.to_dict() for c in prompt_svc.get_categories(lang)]
     return render_template(
         "index.html",
         tr=tr,
@@ -109,6 +112,7 @@ def index():
         supported_langs=get_supported_languages(),
         models=models,
         presets=presets,
+        categories=categories,
         output_languages=get_output_languages(),
         active_job=_get_job_status(),
     )
@@ -166,6 +170,7 @@ def api_start():
         model=request.form.get("model", ""),
         resume=request.form.get("resume", "true").lower() == "true",
         parallel=request.form.get("parallel_mode", "false").lower() == "true",
+        max_workers=int(request.form.get("parallel_max_workers", 4)),
         save_interval=1,
         prompt_preset=request.form.get("prompt_preset", "literary"),
     )
@@ -305,6 +310,129 @@ def api_i18n(lang: str):
     fallback = _load("en")
     fallback.update(translations)
     return jsonify(fallback)
+
+
+@app.route("/api/settings")
+def api_settings_get():
+    """Return current non-sensitive settings via JSON."""
+    s = get_settings()
+    return jsonify({
+        "model_name": s.model_name,
+        "connection_profile": s.connection_profile.value,
+        "ui_lang": s.ui_lang,
+        "block_target_chars": s.rewrite_block_target_chars,
+        "max_retries": s.rewrite_max_retries,
+        "temperature": s.model_temperature,
+        "context_window": s.model_context_window,
+        "max_output_tokens": s.model_max_output_tokens,
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_set():
+    """Update non-sensitive settings and persist to .env."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No JSON body"}), 400
+
+    # Only allow safe, non-sensitive keys to be updated
+    allowed_keys = {
+        "ui_lang", "block_target_chars", "max_retries",
+        "connection_profile", "temperature", "context_window",
+        "max_output_tokens",
+    }
+    to_update = {k: v for k, v in data.items() if k in allowed_keys}
+    if not to_update:
+        return jsonify({"error": "No updatable keys provided"}), 400
+
+    # Map our API keys to .env variable names
+    env_mapping = {
+        "ui_lang": "UI_LANG",
+        "connection_profile": "CONNECTION_PROFILE",
+        "block_target_chars": "REWRITE_BLOCK_TARGET_CHARS",
+        "max_retries": "REWRITE_MAX_RETRIES",
+        "temperature": "MODEL_TEMPERATURE",
+        "context_window": "MODEL_CONTEXT_WINDOW",
+        "max_output_tokens": "MODEL_MAX_OUTPUT_TOKENS",
+    }
+
+    # Try to update .env file directly
+    env_path = Path(".env")
+    if env_path.exists():
+        env_content = env_path.read_text(encoding="utf-8")
+        # Read existing lines to update in-place
+        old_lines: dict[str, str] = {}
+        for line in env_content.splitlines():
+            stripped = line.strip()
+            if "=" in stripped and not stripped.startswith("#"):
+                key, _, val = stripped.partition("=")
+                old_lines[key.strip()] = val.strip()
+
+        updated = False
+        for api_key, env_key in env_mapping.items():
+            if api_key in to_update:
+                old_lines[env_key] = str(to_update[api_key])
+                updated = True
+
+        if updated:
+            new_lines = []
+            for line in env_content.splitlines():
+                stripped = line.strip()
+                if "=" in stripped and not stripped.startswith("#"):
+                    line_key = stripped.partition("=")[0].strip()
+                    if line_key in old_lines:
+                        new_lines.append(f"{line_key}={old_lines[line_key]}")
+                        continue
+                new_lines.append(line)
+
+            # Append any new keys that weren't already in the file
+            written_keys = set()
+            for line in env_content.splitlines():
+                stripped = line.strip()
+                if "=" in stripped and not stripped.startswith("#"):
+                    written_keys.add(stripped.partition("=")[0].strip())
+            for env_key, val in old_lines.items():
+                if env_key not in written_keys:
+                    new_lines.append(f"{env_key}={val}")
+
+            env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    # Reload settings to reflect the change
+    reload_settings()
+    return jsonify({"status": "ok", "updated": list(to_update.keys())})
+
+
+@app.route("/api/presets/by-category/<category>")
+def api_presets_by_category(category: str):
+    """Return prompts filtered by category."""
+    lang = request.args.get("lang", "en")
+    prompt_svc = get_prompt_service()
+    prompts = prompt_svc.get_prompts_by_category(category, lang)
+    if not prompts:
+        return jsonify({"error": f"Category not found: {category}"}), 404
+    return jsonify([p.to_dict() for p in prompts])
+
+
+@app.route("/api/health")
+def api_health():
+    """Healthcheck: verify API is configured and model list is available."""
+    s = get_settings()
+    model_list = []
+    models_available = False
+    if _model_provider:
+        try:
+            model_list = _model_provider.get_available_models()
+            models_available = len(model_list) > 0
+        except Exception:
+            pass
+
+    return jsonify({
+        "status": "ok" if models_available else "degraded",
+        "api_configured": bool(s.get_api_base_url() and s.get_api_key()),
+        "models_available": models_available,
+        "model_count": len(model_list),
+        "connection_profile": s.connection_profile.value,
+    })
 
 
 def run_web(host: str = "127.0.0.1", port: int = 5000, debug: bool = False):

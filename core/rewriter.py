@@ -3,41 +3,39 @@ Main rewriting orchestration loop.
 Decoupled from GUI — works headless or with any frontend.
 """
 
-import os
-import time
 import logging
+import os
 import threading
-from typing import Dict, Optional, Callable
+import time
+from collections.abc import Callable
 
+from core.api_client import call_local_rewrite_api
 from core.config import (
     BLOCK_TARGET_CHARS,
-    MAX_RETRIES,
-    STATE_SUFFIX,
-    INTERMEDIATE_SUFFIX,
     FINAL_SUFFIX,
-    START_MARKER,
-    END_MARKER,
+    INTERMEDIATE_SUFFIX,
     LOCAL_API_BASE_URL,
     LOCAL_API_TOKEN,
-    MIN_REWRITE_LENGTH_RATIO,
+    MAX_RETRIES,
     MAX_REWRITE_LENGTH_RATIO,
+    MIN_REWRITE_LENGTH_RATIO,
+    STATE_SUFFIX,
 )
-from core.text_engine import split_into_blocks, count_chars
 from core.context import GlobalContext
-from core.prompts import get_system_prompt, create_rewrite_prompt
-from core.api_client import call_local_rewrite_api
-from core.state_manager import save_state, load_state, save_intermediate
+from core.prompts import create_rewrite_prompt, get_system_prompt
+from core.state_manager import load_state, save_intermediate, save_state
+from core.text_engine import count_chars, split_into_blocks
 
 logger = logging.getLogger(__name__)
 
 
 def rewrite_process(
-    params: Dict,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-    stop_event: Optional[threading.Event] = None,
-    log_callback: Optional[Callable[[str], None]] = None,
+    params: dict,
+    progress_callback: Callable[[int, int], None] | None = None,
+    stop_event: threading.Event | None = None,
+    log_callback: Callable[[str], None] | None = None,
     parallel: bool = False,
-    max_workers: Optional[int] = 10,
+    max_workers: int | None = 10,
 ) -> bool:
     """
     Main rewriting loop.
@@ -85,9 +83,7 @@ def rewrite_process(
     _log(f"Start: {input_file} -> {output_file}")
     _log(f"Language: {language} | Model: {model_name} | Preset: {prompt_preset}")
     if parallel:
-        _log(
-            f"Mode: PARALLEL (workers={max_workers if max_workers is not None else 'auto'})"
-        )
+        _log(f"Mode: PARALLEL (workers={max_workers if max_workers is not None else 'auto'})")
     else:
         _log("Mode: SEQUENTIAL")
 
@@ -95,7 +91,7 @@ def rewrite_process(
 
     # --- Read input ---
     try:
-        with open(input_file, "r", encoding="utf-8") as f:
+        with open(input_file, encoding="utf-8") as f:
             original_text = f.read()
         if not original_text.strip():
             _log("Input file is empty.", "error")
@@ -109,9 +105,9 @@ def rewrite_process(
 
     _log(f"Input length: {count_chars(original_text)} chars")
 
-    blocks = None
+    blocks: list[dict] | None = None
     processed_idx = -1
-    rewritten_text = None
+    rewritten_text: str | None = None
     state_loaded = False
 
     # --- Resume ---
@@ -119,7 +115,7 @@ def rewrite_process(
         state = load_state(state_file)
         if state:
             try:
-                with open(intermediate_file, "r", encoding="utf-8") as f:
+                with open(intermediate_file) as f:
                     rewritten_text = f.read()
                 blocks = state["original_blocks_data"]
                 processed_idx = state.get("processed_block_index", -1)
@@ -128,9 +124,7 @@ def rewrite_process(
                 if "global_context" in state:
                     global_context = GlobalContext.from_json(state["global_context"])
             except Exception as e:
-                _log(
-                    f"Could not load intermediate file: {e}. Starting fresh.", "warning"
-                )
+                _log(f"Could not load intermediate file: {e}. Starting fresh.", "warning")
 
     if not state_loaded:
         rewritten_text = original_text
@@ -150,6 +144,7 @@ def rewrite_process(
             },
         )
 
+    # blocks is guaranteed non-None at this point (early return if None)
     total_blocks = len(blocks)
     _log(f"Total blocks: {total_blocks}")
     if progress_callback:
@@ -192,7 +187,7 @@ def rewrite_process(
         if i <= processed_idx or block.get("processed", False):
             continue
         if block.get("failed_attempts", 0) >= MAX_RETRIES:
-            _log(f"Block {i+1}: skipped (max retries exceeded)", "warning")
+            _log(f"Block {i + 1}: skipped (max retries exceeded)", "warning")
             continue
 
         start = block["start_char_index"]
@@ -201,7 +196,7 @@ def rewrite_process(
 
         if not (0 <= start <= end <= cur_len):
             _log(
-                f"Block {i+1}: invalid bounds [{start}:{end}] (text len {cur_len})",
+                f"Block {i + 1}: invalid bounds [{start}:{end}] (text len {cur_len})",
                 "error",
             )
             save_state(
@@ -216,7 +211,7 @@ def rewrite_process(
             )
             break
 
-        _log(f"Block {i+1}/{total_blocks} [{start}:{end}] ({end-start} chars)")
+        _log(f"Block {i + 1}/{total_blocks} [{start}:{end}] ({end - start} chars)")
 
         block_text = rewritten_text[start:end]
         original_block_length = block.get("original_char_length", len(block_text))
@@ -268,7 +263,7 @@ def rewrite_process(
         )
 
         if result is None:
-            _log(f"Block {i+1}: API failed. Pausing 10s...", "warning")
+            _log(f"Block {i + 1}: API failed. Pausing 10s...", "warning")
             time.sleep(10)
             block["failed_attempts"] += 1
             continue
@@ -280,7 +275,7 @@ def rewrite_process(
 
         new_text_len = count_chars(new_text)
         delta = new_text_len - len(block_text)
-        _log(f"Block {i+1} done. Delta: {delta:+d} chars")
+        _log(f"Block {i + 1} done. Delta: {delta:+d} chars")
 
         rewritten_text = rewritten_text[:start] + new_text + rewritten_text[end:]
         block["end_char_index"] = start + new_text_len
@@ -289,7 +284,7 @@ def rewrite_process(
         block["last_quality_metrics"] = None
         processed_idx = i
 
-        save_intermediate(intermediate_file, rewritten_text, f"Block {i+1}")
+        save_intermediate(intermediate_file, rewritten_text, f"Block {i + 1}")
 
         if delta != 0:
             for j in range(i + 1, total_blocks):
@@ -314,9 +309,7 @@ def rewrite_process(
     # Final save
     processed_count = sum(1 for b in blocks if b.get("processed", False))
     failed_count = sum(
-        1
-        for b in blocks
-        if b.get("failed_attempts", 0) >= MAX_RETRIES and not b.get("processed", False)
+        1 for b in blocks if b.get("failed_attempts", 0) >= MAX_RETRIES and not b.get("processed", False)
     )
     _log(f"Done. Processed: {processed_count}/{total_blocks}. Failed: {failed_count}.")
 
@@ -350,10 +343,10 @@ def _rewrite_parallel(
     state_file: str,
     intermediate_file: str,
     stop_event: threading.Event,
-    progress_callback: Optional[Callable[[int, int], None]],
-    log_callback: Optional[Callable[[str], None]],
+    progress_callback: Callable[[int, int], None] | None,
+    log_callback: Callable[[str], None] | None,
     _log,
-    max_workers: Optional[int],
+    max_workers: int | None,
     language: str,
     style: str,
     goal: str,
@@ -384,15 +377,13 @@ def _rewrite_parallel(
 
     # Results storage: block_index -> rewritten_text, protected by a lock
     results_lock = threading.Lock()
-    results: Dict[int, str] = {}
+    results: dict[int, str] = {}
 
     # Track which blocks are already done (from previous sessions)
     already_done = {
         i
         for i in range(total_blocks)
-        if i <= processed_idx
-        or blocks[i].get("processed", False)
-        or blocks[i].get("failed_attempts", 0) >= MAX_RETRIES
+        if i <= processed_idx or blocks[i].get("processed", False) or blocks[i].get("failed_attempts", 0) >= MAX_RETRIES
     }
     blocks_to_process = sorted(i for i in range(total_blocks) if i not in already_done)
 
@@ -409,9 +400,7 @@ def _rewrite_parallel(
         end = block["end_char_index"]
         original_block_length = block.get("original_char_length", end - start)
 
-        _log(
-            f"Block {block_index + 1}/{total_blocks} [{start}:{end}] ({end - start} chars)"
-        )
+        _log(f"Block {block_index + 1}/{total_blocks} [{start}:{end}] ({end - start} chars)")
 
         # In parallel mode, extract block text from the ORIGINAL text
         block_text = original_text[start:end]
@@ -427,9 +416,7 @@ def _rewrite_parallel(
         next_block_text = ""
         if block_index < total_blocks - 1:
             nb = blocks[block_index + 1]
-            ns, ne = nb["start_char_index"], min(
-                nb["end_char_index"], len(original_text)
-            )
+            ns, ne = nb["start_char_index"], min(nb["end_char_index"], len(original_text))
             if 0 <= ns <= ne <= len(original_text):
                 next_block_text = original_text[ns:ne]
 
@@ -502,9 +489,7 @@ def _rewrite_parallel(
             progress_callback(total_completed, total_blocks)
 
     # --- Dispatch workers ---
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=effective_workers
-    ) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
         futures = {}
         for block_index in blocks_to_process:
             future = executor.submit(_rewrite_one_block, block_index)
@@ -523,18 +508,14 @@ def _rewrite_parallel(
         if i in already_done:
             # Already-processed: use text from original text at these indices
             b = blocks[i]
-            block_segments.append(
-                original_text[b["start_char_index"] : b["end_char_index"]]
-            )
+            block_segments.append(original_text[b["start_char_index"] : b["end_char_index"]])
         elif i in results:
             # Successfully rewritten
             block_segments.append(results[i])
         else:
             # Not rewritten (failed/stopped) -- fallback to original
             b = blocks[i]
-            block_segments.append(
-                original_text[b["start_char_index"] : b["end_char_index"]]
-            )
+            block_segments.append(original_text[b["start_char_index"] : b["end_char_index"]])
             _log(f"Block {i + 1}: not rewritten, using original", "warning")
 
     final_text = "".join(block_segments)
@@ -545,17 +526,13 @@ def _rewrite_parallel(
 
     processed_count = sum(1 for b in blocks if b.get("processed", False))
     failed_count = sum(
-        1
-        for b in blocks
-        if b.get("failed_attempts", 0) >= MAX_RETRIES and not b.get("processed", False)
+        1 for b in blocks if b.get("failed_attempts", 0) >= MAX_RETRIES and not b.get("processed", False)
     )
     _log(f"Done. Processed: {processed_count}/{total_blocks}. Failed: {failed_count}.")
 
     final_file = os.path.join(output_dir, base_name + FINAL_SUFFIX)
     save_intermediate(final_file, final_text, "Final")
-    final_processed_idx = (
-        total_blocks - 1 if processed_count == total_blocks else processed_idx
-    )
+    final_processed_idx = total_blocks - 1 if processed_count == total_blocks else processed_idx
     save_state(
         state_file,
         {

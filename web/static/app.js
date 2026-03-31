@@ -207,6 +207,21 @@ const FormValidator = {
 
 // ── SSE Connection ──────────────────────────────────────────────────────────
 let evtSource = null;
+let sseReconnectAttempts = 0;
+const SSE_MAX_RECONNECT_DELAY = 30000; // max 30s between reconnects
+const SSE_BASE_RECONNECT_DELAY = 3000;
+
+function updateSseStatus(connected) {
+    const el = document.getElementById('sse-status');
+    if (!el) return;
+    if (connected) {
+        el.textContent = 'SSE: OK';
+        el.className = 'badge badge-ok';
+    } else {
+        el.textContent = `SSE: Lost${sseReconnectAttempts > 0 ? ' (retry ' + sseReconnectAttempts + ')' : ''}`;
+        el.className = 'badge badge-err';
+    }
+}
 
 function connectSSE() {
     if (evtSource) evtSource.close();
@@ -216,29 +231,38 @@ function connectSSE() {
         const data = JSON.parse(e.data);
         syncStatus(data);
     });
-    
+
     evtSource.addEventListener('progress', e => {
         const d = JSON.parse(e.data);
         ViewModel.setProgress(d.current, d.total, d.pct);
     });
-    
+
     evtSource.addEventListener('log', e => {
         const d = JSON.parse(e.data);
         appendLog(d.msg);
     });
-    
+
     evtSource.addEventListener('done', e => {
         const d = JSON.parse(e.data);
         onDone(d.output);
     });
-    
+
     evtSource.onopen = () => {
         ViewModel.setConnected(true);
+        updateSseStatus(true);
+        sseReconnectAttempts = 0; // reset on successful connection
     };
-    
+
     evtSource.onerror = () => {
         ViewModel.setConnected(false);
-        setTimeout(connectSSE, 3000);
+        updateSseStatus(false);
+        sseReconnectAttempts++;
+        // Exponential backoff: 3s, 6s, 12s, 24s, 30s cap
+        const delay = Math.min(
+            SSE_BASE_RECONNECT_DELAY * Math.pow(2, sseReconnectAttempts - 1),
+            SSE_MAX_RECONNECT_DELAY
+        );
+        setTimeout(connectSSE, delay);
     };
 }
 
@@ -374,6 +398,125 @@ function initPromptSelector() {
     const lang = langInput ? langInput.value : 'en';
     ViewModel.setLanguage(lang);
     loadPrompts(lang);
+}
+
+// ── Prompt Presets Card ─────────────────────────────────────────────────────
+
+let allPresets = [];
+let presetCategories = [];
+let activeCategory = 'all';
+
+async function loadPromptPresets() {
+    const grid = document.getElementById('prompts-grid');
+    const card = document.getElementById('prompts-card');
+    if (!grid || !card) return;
+
+    const langInput = document.querySelector('input[name="lang"]');
+    const lang = langInput ? langInput.value : 'en';
+
+    // Show skeleton
+    card.style.display = 'block';
+    grid.innerHTML = '<div class="preset-skeleton"></div>'.repeat(6);
+
+    try {
+        const [promptsResp, catsResp] = await Promise.all([
+            fetch(`/api/prompts?lang=${lang}`),
+            fetch(`/api/prompts/categories?lang=${lang}`)
+        ]);
+
+        if (promptsResp.ok) allPresets = await promptsResp.json();
+        if (catsResp.ok) presetCategories = await catsResp.json();
+
+        renderCategoryFilter();
+        renderPresetTiles();
+    } catch (e) {
+        ToastManager.error('Failed to load prompt presets');
+        grid.innerHTML = '';
+    }
+}
+
+function renderCategoryFilter() {
+    const container = document.getElementById('category-filter');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // "All" chip
+    const allChip = document.createElement('button');
+    allChip.type = 'button';
+    allChip.className = 'cat-chip' + (activeCategory === 'all' ? ' active' : '');
+    allChip.textContent = 'All';
+    allChip.addEventListener('click', () => {
+        activeCategory = 'all';
+        renderCategoryFilter();
+        renderPresetTiles();
+    });
+    container.appendChild(allChip);
+
+    // Category chips
+    presetCategories.forEach(cat => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'cat-chip' + (activeCategory === cat.id ? ' active' : '');
+        chip.textContent = cat.name;
+        chip.addEventListener('click', () => {
+            activeCategory = cat.id;
+            renderCategoryFilter();
+            renderPresetTiles();
+        });
+        container.appendChild(chip);
+    });
+}
+
+function renderPresetTiles() {
+    const grid = document.getElementById('prompts-grid');
+    if (!grid) return;
+
+    grid.innerHTML = '';
+
+    const filtered = activeCategory === 'all'
+        ? allPresets
+        : allPresets.filter(p => p.category === activeCategory);
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<p style="color:var(--text-dim);grid-column:1/-1;">No presets available</p>';
+        return;
+    }
+
+    // Get currently selected preset
+    const sel = document.getElementById('prompt_preset');
+    const selectedId = sel ? sel.value : '';
+
+    filtered.forEach(p => {
+        const tile = document.createElement('div');
+        tile.className = 'preset-tile';
+        if (p.id === selectedId) tile.classList.add('selected');
+
+        tile.innerHTML = `
+            <div class="preset-tile-name">${escapeHtml(p.name || p.id)}</div>
+            <div class="preset-tile-desc">${escapeHtml(p.description || '')}</div>
+            ${p.category ? `<div class="preset-tile-category">${escapeHtml(p.category)}</div>` : ''}
+        `;
+
+        tile.addEventListener('click', () => {
+            // Update the select dropdown
+            if (sel) {
+                sel.value = p.id;
+                sel.dispatchEvent(new Event('change'));
+            }
+            // Update selected state
+            document.querySelectorAll('.preset-tile').forEach(t => t.classList.remove('selected'));
+            tile.classList.add('selected');
+        });
+
+        grid.appendChild(tile);
+    });
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 }
 
 // ── Stop ──────────────────────────────────────────────────────────────────────
@@ -530,6 +673,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    // Clear buttons
+    document.querySelectorAll('.clear-btn[data-target]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const target = document.getElementById(btn.dataset.target);
+            if (target) { target.value = ''; target.focus(); }
+        });
+    });
+
+    // Theme toggle
+    const themeBtn = document.getElementById('theme-toggle');
+    if (themeBtn) {
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'light') document.body.classList.add('light-mode');
+        themeBtn.addEventListener('click', () => {
+            document.body.classList.toggle('light-mode');
+            localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
+        });
+    }
+
     // Form submit
     const form = document.getElementById('rewrite-form');
     if (form) {
@@ -572,4 +734,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     connectSSE();
     initPromptSelector();
+    loadPromptPresets();
 });
