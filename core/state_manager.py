@@ -1,15 +1,15 @@
 """
 Atomic state and intermediate file persistence.
 """
-import os
+
 import json
 import logging
-from typing import Optional, Dict
+import os
 
 logger = logging.getLogger(__name__)
 
 
-def save_state(filename: str, data: Dict) -> None:
+def save_state(filename: str, data: dict) -> None:
     temp_file = filename + ".tmp"
     try:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
@@ -27,11 +27,11 @@ def save_state(filename: str, data: Dict) -> None:
         raise
 
 
-def load_state(filename: str) -> Optional[Dict]:
+def load_state(filename: str) -> dict | None:
     if not os.path.exists(filename):
         return None
     try:
-        with open(filename, "r", encoding="utf-8") as f:
+        with open(filename, encoding="utf-8") as f:
             state = json.load(f)
         required = {"processed_block_index", "original_blocks_data", "total_blocks"}
         if not required.issubset(state.keys()):

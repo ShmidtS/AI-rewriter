@@ -1,27 +1,28 @@
 """
 Text splitting and sentence utilities.
 """
+
+import difflib
 import re
 import string
-import difflib
-from typing import List, Optional, Dict
 
 from core.config import (
-    SPLIT_PRIORITY_ENHANCED,
-    MIN_BLOCK_LEN_FACTOR,
-    MAX_BLOCK_LEN_FACTOR,
-    SEARCH_RADIUS_FACTOR,
-    MIN_REWRITE_LENGTH_RATIO,
-    MAX_REWRITE_LENGTH_RATIO,
-    SIMILARITY_THRESHOLD,
-    MIN_WORDS_FOR_DUPLICATE_CHECK,
-    START_MARKER,
     END_MARKER,
+    MAX_BLOCK_LEN_FACTOR,
+    MAX_REWRITE_LENGTH_RATIO,
+    MIN_BLOCK_LEN_FACTOR,
+    MIN_REWRITE_LENGTH_RATIO,
+    MIN_WORDS_FOR_DUPLICATE_CHECK,
+    SEARCH_RADIUS_FACTOR,
+    SIMILARITY_THRESHOLD,
+    SPLIT_PRIORITY_ENHANCED,
+    START_MARKER,
 )
 
 
 class BlockInfo(dict):
     """Block of text to be rewritten."""
+
     # Fields: block_index, start_char_index, end_char_index,
     #         original_char_length, processed, failed_attempts
 
@@ -30,7 +31,7 @@ def count_chars(text: str) -> int:
     return len(text) if isinstance(text, str) else 0
 
 
-def split_into_sentences(text: str) -> List[str]:
+def split_into_sentences(text: str) -> list[str]:
     sentences = re.split(r"(?<=[.!?])\s+", text)
     return [s.strip() for s in sentences if s.strip()]
 
@@ -44,8 +45,8 @@ def normalize_sentence(sentence: str) -> str:
     return re.sub(r"\s+", " ", sentence).strip()
 
 
-def calculate_text_quality_metrics(original: str, rewritten: str) -> Dict[str, float]:
-    metrics: Dict[str, float] = {}
+def calculate_text_quality_metrics(original: str, rewritten: str) -> dict[str, float]:
+    metrics: dict[str, float] = {}
     orig_len = len(original)
     rew_len = len(rewritten)
 
@@ -167,7 +168,7 @@ def find_split_point(text: str, start: int, target_end: int, min_len: int, max_l
     return best_point if best_point != -1 else min(ideal_end, start + max_len)
 
 
-def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
+def split_into_blocks(text: str, target_size: int) -> list[dict] | None:
     text_len = count_chars(text)
     if not text_len:
         return None
@@ -184,14 +185,16 @@ def split_into_blocks(text: str, target_size: int) -> Optional[List[BlockInfo]]:
         if end_pos <= current_pos:
             end_pos = text_len
 
-        blocks.append({
-            "block_index": block_idx,
-            "start_char_index": current_pos,
-            "end_char_index": end_pos,
-            "original_char_length": end_pos - current_pos,
-            "processed": False,
-            "failed_attempts": 0,
-        })
+        blocks.append(
+            {
+                "block_index": block_idx,
+                "start_char_index": current_pos,
+                "end_char_index": end_pos,
+                "original_char_length": end_pos - current_pos,
+                "processed": False,
+                "failed_attempts": 0,
+            }
+        )
         current_pos = end_pos
         block_idx += 1
 

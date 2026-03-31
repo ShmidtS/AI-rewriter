@@ -1,0 +1,99 @@
+[project]
+name = "ai-book-rewriter"
+version = "1.0.0"
+description = "AI-powered book rewriting tool with multiple LLM providers"
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "sv_ttk>=0.6.0",
+    "flask>=3.0.0",
+    "werkzeug>=3.0.0",
+    "google-generativeai>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.8.0",
+    "pyright>=1.1.0",
+    "ruff>=0.4.0",
+    "pytest>=8.0.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort (import sorting)
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B904",   # raise from err not always needed
+    "SIM108", # ternary if-else (if-else with comments is clearer in some cases)
+    "RUF022", # __all__ sorting (intentional grouping with comments)
+    "W293",   # blank line with whitespace (handled by formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "app", "gui", "web", "prompts"]
+combine-as-imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint.per-file-ignores]
+"test.py" = ["E402", "F401"]
+"main.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "core.text_engine",
+    "core.prompts",
+    "core.rewriter",
+    "core.api_client",
+    "core.state_manager",
+    "prompts.*",
+]
+disallow_untyped_defs = false
+warn_return_any = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "core.rewriter"
+warn_return_any = false
+disable_error_code = ["arg-type", "index", "union-attr", "misc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

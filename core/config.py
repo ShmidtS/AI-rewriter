@@ -5,7 +5,8 @@ Loads settings from .env file.
 This module provides backward-compatible module-level constants
 while internally using the typed Settings from settings.py.
 """
-from core.settings import get_settings, ConnectionProfile
+
+from core.settings import ConnectionProfile, get_settings
 
 # Initialize settings (loads from .env)
 _settings = get_settings()
@@ -102,55 +103,59 @@ REWRITER_MODEL_DEFAULT: str = LOCAL_MODEL_NAME
 # Connection Profile Helpers
 # =============================================================================
 
+
 def get_connection_profile() -> ConnectionProfile:
     """Get the current connection profile."""
     return _settings.connection_profile
+
 
 def is_proxy_mode() -> bool:
     """Check if proxy mode is active."""
     return _settings.is_proxy_mode()
 
+
 def get_timeout() -> int:
     """Get appropriate timeout based on connection profile."""
     return _settings.get_timeout()
+
 
 # =============================================================================
 # Re-export Settings for direct access
 # =============================================================================
 
 __all__ = [
+    "ADAPTIVE_TEMPERATURE_BASE",
+    "ADAPTIVE_TEMPERATURE_MAX",
+    "ADAPTIVE_TEMPERATURE_MIN",
+    "BLOCK_TARGET_CHARS",
+    "END_MARKER",
+    "FINAL_SUFFIX",
+    "INTERMEDIATE_SUFFIX",
     # Legacy constants
     "LOCAL_API_BASE_URL",
     "LOCAL_API_TOKEN",
-    "LOCAL_MODEL_NAME",
     "LOCAL_CONTEXT_WINDOW",
     "LOCAL_MAX_OUTPUT_TOKENS",
-    "BLOCK_TARGET_CHARS",
-    "MIN_REWRITE_LENGTH_RATIO",
-    "MAX_REWRITE_LENGTH_RATIO",
-    "SIMILARITY_THRESHOLD",
-    "MIN_BLOCK_LEN_FACTOR",
+    "LOCAL_MODEL_NAME",
     "MAX_BLOCK_LEN_FACTOR",
-    "SEARCH_RADIUS_FACTOR",
-    "START_MARKER",
-    "END_MARKER",
     "MAX_RETRIES",
-    "RETRY_DELAY_SECONDS",
-    "ADAPTIVE_TEMPERATURE_BASE",
-    "ADAPTIVE_TEMPERATURE_MIN",
-    "ADAPTIVE_TEMPERATURE_MAX",
+    "MAX_REWRITE_LENGTH_RATIO",
     "MAX_SENTENCE_SIMILARITY_THRESHOLD",
+    "MIN_BLOCK_LEN_FACTOR",
+    "MIN_REWRITE_LENGTH_RATIO",
     "MIN_WORDS_FOR_DUPLICATE_CHECK",
-    "STATE_SUFFIX",
-    "INTERMEDIATE_SUFFIX",
-    "FINAL_SUFFIX",
-    "SPLIT_PRIORITY_ENHANCED",
+    "RETRY_DELAY_SECONDS",
     "REWRITER_MODEL_DEFAULT",
+    "SEARCH_RADIUS_FACTOR",
+    "SIMILARITY_THRESHOLD",
+    "SPLIT_PRIORITY_ENHANCED",
+    "START_MARKER",
+    "STATE_SUFFIX",
+    "ConnectionProfile",
     # New helpers
     "get_connection_profile",
-    "is_proxy_mode",
-    "get_timeout",
     # Settings access
     "get_settings",
-    "ConnectionProfile",
+    "get_timeout",
+    "is_proxy_mode",
 ]

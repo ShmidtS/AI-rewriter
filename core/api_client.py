@@ -2,36 +2,34 @@
 Local LLM API client.
 Uses requests + SSE streaming for compatibility with proxy-specific parameters.
 """
+
 import json
-import time
 import logging
 import threading
-from typing import Optional, Tuple, Dict
+import time
 
 import requests
 
 from core.config import (
+    ADAPTIVE_TEMPERATURE_BASE,
+    ADAPTIVE_TEMPERATURE_MAX,
+    ADAPTIVE_TEMPERATURE_MIN,
     LOCAL_API_BASE_URL,
     LOCAL_API_TOKEN,
     LOCAL_MAX_OUTPUT_TOKENS,
     MAX_RETRIES,
     RETRY_DELAY_SECONDS,
-    ADAPTIVE_TEMPERATURE_BASE,
-    ADAPTIVE_TEMPERATURE_MIN,
-    ADAPTIVE_TEMPERATURE_MAX,
     get_timeout,
-    is_proxy_mode,
 )
-from core.settings import get_settings
-from core.text_engine import validate_rewritten_text, count_chars
-from core.prompts import create_rewrite_prompt
+from core.text_engine import count_chars, validate_rewritten_text
 
 logger = logging.getLogger(__name__)
 
 
-def parse_json_response(text: str) -> Tuple[Optional[str], Optional[Dict]]:
+def parse_json_response(text: str) -> tuple[str | None, dict | None]:
     """Parse API response: JSON with rewritten_block/global_context, or plain text."""
     import re
+
     if not text:
         return None, None
     text = text.strip()
@@ -48,6 +46,7 @@ def parse_json_response(text: str) -> Tuple[Optional[str], Optional[Dict]]:
 def list_available_models(base_url: str = LOCAL_API_BASE_URL, token: str = LOCAL_API_TOKEN):
     """Fetch model list from the proxy /v1/models endpoint."""
     from core.config import LOCAL_MODEL_NAME
+
     try:
         resp = requests.get(
             f"{base_url}/models",
@@ -65,7 +64,7 @@ def list_available_models(base_url: str = LOCAL_API_BASE_URL, token: str = LOCAL
 
 def calculate_adaptive_temperature(
     failed_attempts: int,
-    quality_metrics: Optional[Dict[str, float]] = None,
+    quality_metrics: dict[str, float] | None = None,
 ) -> float:
     attempt_factor = min(failed_attempts * 0.05, 0.2)
     similarity_factor = 0.0
@@ -89,10 +88,10 @@ def call_local_rewrite_api(
     stop_event: threading.Event,
     global_context,
     failed_attempts: int = 0,
-    previous_quality_metrics: Optional[Dict[str, float]] = None,
+    previous_quality_metrics: dict[str, float] | None = None,
     base_url: str = LOCAL_API_BASE_URL,
     token: str = LOCAL_API_TOKEN,
-) -> Optional[Tuple[str, Optional[Dict]]]:
+) -> tuple[str, dict | None] | None:
     """
     Calls the local LLM API with SSE streaming.
     Returns (rewritten_block, context_update) or None on failure.
@@ -109,9 +108,7 @@ def call_local_rewrite_api(
             return None
 
         if attempt > 0:
-            adaptive_temp = calculate_adaptive_temperature(
-                failed_attempts + attempt, previous_quality_metrics
-            )
+            adaptive_temp = calculate_adaptive_temperature(failed_attempts + attempt, previous_quality_metrics)
 
         ctx = f"Attempt {attempt + 1}/{MAX_RETRIES}"
         logger.info(f"API call: {ctx}")
@@ -185,7 +182,7 @@ def call_local_rewrite_api(
             error_msg = str(e)
             logger.error(f"{ctx}: API error: {error_msg}")
             if "502" in error_msg or "Bad Gateway" in error_msg:
-                wait_time = min(30, RETRY_DELAY_SECONDS * (2 ** attempt))
+                wait_time = min(30, RETRY_DELAY_SECONDS * (2**attempt))
                 logger.warning(f"{ctx}: 502 - waiting {wait_time}s")
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(wait_time)

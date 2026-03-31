@@ -2,8 +2,8 @@
 Typed configuration using Pydantic Settings.
 Loads settings from .env file with validation and type safety.
 """
+
 from enum import Enum
-from typing import Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,27 +11,29 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class ConnectionProfile(str, Enum):
     """Connection profile for API access."""
+
     DIRECT = "direct"  # Direct API connection (e.g., OpenAI, Google)
-    PROXY = "proxy"    # Through local proxy (E:\456\LLM-API-Key-Proxy)
-    AUTO = "auto"      # Auto-detect: try proxy first, fallback to direct
+    PROXY = "proxy"  # Through local proxy (E:\456\LLM-API-Key-Proxy)
+    AUTO = "auto"  # Auto-detect: try proxy first, fallback to direct
 
 
 class Settings(BaseSettings):
     """
     Main application settings.
-    
+
     Supports three connection profiles:
     - direct: Use DIRECT_* settings for API connection
     - proxy: Use PROXY_* settings through local proxy
     - auto: Try proxy first, fallback to direct
-    
+
     All settings are loaded from .env file with appropriate prefixes.
     """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        nested_model_default_factor=0,  # Don't try to parse nested models from env
+        nested_model_default_factor=0,  # type: ignore[typeddict-unknown-key]
     )
 
     # =========================================================================
@@ -168,32 +170,32 @@ class Settings(BaseSettings):
     # Legacy Variables (backward compatibility)
     # =========================================================================
     # These are read without prefix for backward compatibility
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         alias="AUTH_TOKEN",
         description="Legacy: API key (use PROXY_API_KEY or DIRECT_API_KEY)",
     )
-    api_base_url: Optional[str] = Field(
+    api_base_url: str | None = Field(
         default=None,
         alias="OPENAI_BASE_URL",
         description="Legacy: API base URL (use PROXY_BASE_URL or DIRECT_BASE_URL)",
     )
-    model_name_legacy: Optional[str] = Field(
+    model_name_legacy: str | None = Field(
         default=None,
         alias="MODEL",
         description="Legacy: Model name (use MODEL_NAME)",
     )
-    context_window_legacy: Optional[int] = Field(
+    context_window_legacy: int | None = Field(
         default=None,
         alias="CONTEXT_WINDOW",
         description="Legacy: Context window (use MODEL_CONTEXT_WINDOW)",
     )
-    max_output_tokens_legacy: Optional[int] = Field(
+    max_output_tokens_legacy: int | None = Field(
         default=None,
         alias="MAX_OUTPUT_TOKENS",
         description="Legacy: Max output tokens (use MODEL_MAX_OUTPUT_TOKENS)",
     )
-    block_target_chars_legacy: Optional[int] = Field(
+    block_target_chars_legacy: int | None = Field(
         default=None,
         alias="BLOCK_TARGET_CHARS",
         description="Legacy: Block target chars (use REWRITE_BLOCK_TARGET_CHARS)",
@@ -213,25 +215,25 @@ class Settings(BaseSettings):
         # Model name
         if self.model_name == "gemini/gemini-2.5-flash" and self.model_name_legacy:
             self.model_name = self.model_name_legacy
-        
+
         # Context window
         if self.model_context_window == 1_000_000 and self.context_window_legacy:
             self.model_context_window = self.context_window_legacy
-        
+
         # Max output tokens
         if self.model_max_output_tokens == 32768 and self.max_output_tokens_legacy:
             self.model_max_output_tokens = self.max_output_tokens_legacy
-        
+
         # Block target chars
         if self.rewrite_block_target_chars == 15000 and self.block_target_chars_legacy:
             self.rewrite_block_target_chars = self.block_target_chars_legacy
-        
+
         return self
 
     def get_api_base_url(self) -> str:
         """
         Get the effective API base URL based on connection profile.
-        
+
         Priority:
         1. Profile-specific URL (proxy_base_url or direct_base_url)
         2. Legacy OPENAI_BASE_URL
@@ -241,17 +243,17 @@ class Settings(BaseSettings):
             url = self.direct_base_url
         else:  # PROXY or AUTO
             url = self.proxy_base_url
-        
+
         # Fallback to legacy
         if not url and self.api_base_url:
             url = self.api_base_url
-        
+
         return url or "http://127.0.0.1:8000/v1"
 
     def get_api_key(self) -> str:
         """
         Get the effective API key based on connection profile.
-        
+
         Priority:
         1. Profile-specific key (proxy_api_key or direct_api_key)
         2. Legacy AUTH_TOKEN
@@ -261,11 +263,11 @@ class Settings(BaseSettings):
             key = self.direct_api_key
         else:  # PROXY or AUTO
             key = self.proxy_api_key
-        
+
         # Fallback to legacy
         if not key and self.api_key:
             key = self.api_key
-        
+
         return key or ""
 
     def get_model_name(self) -> str:
@@ -292,13 +294,13 @@ class Settings(BaseSettings):
 
 
 # Global settings instance (singleton pattern)
-_settings: Optional[Settings] = None
+_settings: Settings | None = None
 
 
 def get_settings() -> Settings:
     """
     Get the global settings instance.
-    
+
     Loads from .env file on first call, then caches the result.
     Use this function instead of direct Settings() instantiation
     to ensure consistent configuration across the application.
@@ -312,7 +314,7 @@ def get_settings() -> Settings:
 def reload_settings() -> Settings:
     """
     Force reload settings from .env file.
-    
+
     Useful for testing or when .env file changes during runtime.
     """
     global _settings

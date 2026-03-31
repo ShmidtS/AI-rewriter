@@ -1,23 +1,22 @@
 """
 GlobalContext: tracks narrative state across book blocks.
 """
-from typing import List, Dict, Optional
 
 
 class GlobalContext:
     def __init__(
         self,
-        characters: Optional[List[Dict]] = None,
-        plot_points: Optional[List[Dict]] = None,
-        themes: Optional[List[str]] = None,
-        style_notes: Optional[List[str]] = None,
+        characters: list[dict] | None = None,
+        plot_points: list[dict] | None = None,
+        themes: list[str] | None = None,
+        style_notes: list[str] | None = None,
     ):
         self.characters = characters or []
         self.plot_points = plot_points or []
         self.themes = themes or []
         self.style_notes = style_notes or []
 
-    def to_json(self) -> Dict:
+    def to_json(self) -> dict:
         return {
             "characters": self.characters,
             "plot_points": self.plot_points,
@@ -25,7 +24,7 @@ class GlobalContext:
             "style_notes": self.style_notes,
         }
 
-    def update_from_response(self, context_update: Dict) -> None:
+    def update_from_response(self, context_update: dict) -> None:
         if not context_update:
             return
         for char in context_update.get("characters", []):
@@ -42,7 +41,7 @@ class GlobalContext:
                 self.style_notes.append(note)
 
     @classmethod
-    def from_json(cls, data: Dict) -> "GlobalContext":
+    def from_json(cls, data: dict) -> "GlobalContext":
         return cls(
             characters=data.get("characters", []),
             plot_points=data.get("plot_points", []),

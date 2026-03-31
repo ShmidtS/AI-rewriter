@@ -4,18 +4,18 @@ RewriteService - High-level facade for rewrite orchestration.
 Provides clean API for GUI/Web interfaces while maintaining
 backward compatibility with core.rewriter.rewrite_process().
 """
+
 import logging
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
+from core.rewriter import rewrite_process
 from core.services.interfaces import (
     IRewriteService,
-    IProgressReporter,
-    RewriteStatus,
     ProgressInfo,
     RewriteParams,
+    RewriteStatus,
 )
-from core.rewriter import rewrite_process
 from core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,43 +24,43 @@ logger = logging.getLogger(__name__)
 class RewriteService(IRewriteService):
     """
     High-level service for managing rewrite operations.
-    
+
     Acts as a facade over core.rewriter.rewrite_process(), providing:
     - Clean API for GUI/Web
     - Integration with typed Settings
     - Thread-safe job management
     - Progress and status tracking
     """
-    
-    def __init__(self, settings: Optional[Settings] = None):
+
+    def __init__(self, settings: Settings | None = None):
         """
         Initialize the rewrite service.
-        
+
         Args:
             settings: Optional Settings instance. Uses global settings if not provided.
         """
         self._settings = settings or get_settings()
         self._stop_event: threading.Event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._progress: ProgressInfo = ProgressInfo()
         self._lock = threading.Lock()
-        self._progress_callback: Optional[Callable[[int, int], None]] = None
-        self._log_callback: Optional[Callable[[str], None]] = None
+        self._progress_callback: Callable[[int, int], None] | None = None
+        self._log_callback: Callable[[str], None] | None = None
 
     def start_rewrite(
         self,
         params: RewriteParams,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        log_callback: Optional[Callable[[str], None]] = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+        log_callback: Callable[[str], None] | None = None,
     ) -> bool:
         """
         Start a rewrite job.
-        
+
         Args:
             params: Rewrite parameters
             progress_callback: Optional callback for progress updates
             log_callback: Optional callback for log messages
-            
+
         Returns:
             True if job started successfully, False otherwise
         """
@@ -68,19 +68,19 @@ class RewriteService(IRewriteService):
             if self._progress.is_running:
                 logger.warning("Attempted to start rewrite while job is running")
                 return False
-            
+
             # Reset state
             self._stop_event.clear()
             self._progress_callback = progress_callback
             self._log_callback = log_callback
-            
+
             # Update status
             self._progress = ProgressInfo(
                 status=RewriteStatus.RUNNING,
                 filename=params.input_file,
                 output_name=params.output_file,
             )
-            
+
             # Apply settings to params if not explicitly set
             params_dict = params.to_dict()
             if params_dict.get("base_url") is None:
@@ -89,7 +89,7 @@ class RewriteService(IRewriteService):
                 params_dict["token"] = self._settings.get_api_key()
             if not params_dict.get("rewriter_model"):
                 params_dict["rewriter_model"] = self._settings.get_model_name()
-            
+
             # Start rewrite thread
             self._thread = threading.Thread(
                 target=self._run_rewrite,
@@ -105,7 +105,7 @@ class RewriteService(IRewriteService):
         with self._lock:
             if not self._progress.is_running:
                 return
-            
+
             self._progress.status = RewriteStatus.STOPPING
             self._stop_event.set()
             logger.info("Requested rewrite stop")
@@ -132,26 +132,26 @@ class RewriteService(IRewriteService):
         with self._lock:
             return self._progress.is_running
 
-    def wait_completion(self, timeout: Optional[float] = None) -> bool:
+    def wait_completion(self, timeout: float | None = None) -> bool:
         """
         Wait for the current job to complete.
-        
+
         Args:
             timeout: Maximum time to wait in seconds, None for indefinite
-            
+
         Returns:
             True if job completed, False if timeout reached
         """
         if self._thread is None:
             return True
-        
+
         self._thread.join(timeout=timeout)
         return not self._thread.is_alive()
 
     def _run_rewrite(self, params: dict) -> None:
         """
         Internal method to run rewrite in a thread.
-        
+
         Args:
             params: Parameters dict for rewrite_process
         """
@@ -165,7 +165,7 @@ class RewriteService(IRewriteService):
                 parallel=params.get("parallel", False),
                 max_workers=params.get("max_workers"),
             )
-            
+
             # Update final status
             with self._lock:
                 if self._stop_event.is_set():
@@ -175,13 +175,13 @@ class RewriteService(IRewriteService):
                 else:
                     self._progress.status = RewriteStatus.FAILED
                     self._progress.error_message = "Rewrite process failed"
-            
+
         except Exception as e:
             logger.exception("Rewrite job failed with exception")
             with self._lock:
                 self._progress.status = RewriteStatus.FAILED
                 self._progress.error_message = str(e)
-        
+
         finally:
             # Clear thread reference
             with self._lock:
@@ -192,7 +192,7 @@ class RewriteService(IRewriteService):
         with self._lock:
             self._progress.current = current
             self._progress.total = total
-        
+
         if self._progress_callback:
             try:
                 self._progress_callback(current, total)
@@ -209,13 +209,13 @@ class RewriteService(IRewriteService):
 
 
 # Singleton instance for convenience
-_rewrite_service: Optional[RewriteService] = None
+_rewrite_service: RewriteService | None = None
 
 
 def get_rewrite_service() -> RewriteService:
     """
     Get the global RewriteService instance.
-    
+
     Creates a new instance on first call, then caches it.
     Use this for simple use cases where dependency injection is not needed.
     """
