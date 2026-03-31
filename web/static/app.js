@@ -194,7 +194,7 @@ const FormValidator = {
      */
     validateForm(form) {
         const fileInput = form.querySelector('#input_file');
-        const languageSelect = form.querySelector('#language');
+        const languageSelect = form.querySelector('#output_language');
         const modelSelect = form.querySelector('#model');
         
         const fileValid = this.validateField(fileInput, 'file');

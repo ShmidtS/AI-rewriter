@@ -45,5 +45,6 @@
   "network_error": "Error de red",
   "output_file_placeholder": "Dejar vacío para generación automática",
   "select_input_first": "Por favor, seleccione primero un archivo de entrada",
-  "parallel_mode": "Modo paralelo (rápido)"
+  "parallel_mode": "Modo paralelo (rápido)",
+  "output_language_hint": "Idioma del texto reescrito"
 }

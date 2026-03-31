@@ -165,6 +165,7 @@ def api_start():
         input_file=str(input_path),
         output_file=str(output_path),
         language=request.form.get("language", "Русский"),
+        output_language=request.form.get("output_language", ""),
         style=request.form.get("style", ""),
         goal=request.form.get("goal", ""),
         model=request.form.get("model", ""),

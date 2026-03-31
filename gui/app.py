@@ -141,6 +141,9 @@ class BookRewriterApp:
         lbl_lg.grid(row=2, column=0, sticky=tk.W, padx=6, pady=3)
         self._widgets["language_lbl"] = lbl_lg
         lang_combo.grid(row=2, column=1, sticky=tk.W, padx=6, pady=3)
+        ttk.Label(parent, text=tr("output_language_hint"),
+                  foreground="#7a7e9e", font=("", 9, "italic")
+                  ).grid(row=2, column=2, sticky=tk.W, padx=(4, 6), pady=3)
         
         # Model
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
@@ -295,11 +298,13 @@ class BookRewriterApp:
             input_file=input_file,
             output_file=output_file,
             language=self.lang_var.get(),
+            output_language=self.lang_var.get(),
             style=self.style_text.get("1.0", tk.END).strip(),
             goal=self.goal_text.get("1.0", tk.END).strip(),
             model=self.model_var.get(),
             resume=self.resume_var.get(),
             parallel=self.parallel_var.get(),
+            max_workers=10,
             save_interval=1,
             prompt_preset=self.preset_var.get(),
         )

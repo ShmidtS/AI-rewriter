@@ -45,5 +45,6 @@
   "network_error": "Netzwerkfehler",
   "output_file_placeholder": "Leer lassen für automatische Generierung",
   "select_input_first": "Bitte wählen Sie zuerst eine Eingabedatei aus",
-  "parallel_mode": "Paralleler Modus (schnell)"
+  "parallel_mode": "Paralleler Modus (schnell)",
+  "output_language_hint": "Sprache des umgeschriebenen Texts"
 }

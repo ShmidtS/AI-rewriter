@@ -45,5 +45,6 @@
   "network_error": "네트워크 오류",
   "output_file_placeholder": "자동 생성의 경우 비워두세요",
   "select_input_first": "먼저 입력 파일을 선택해 주세요",
-  "parallel_mode": "병렬 모드 (빠름)"
+  "parallel_mode": "병렬 모드 (빠름)",
+  "output_language_hint": "재작성된 텍스트의 언어"
 }

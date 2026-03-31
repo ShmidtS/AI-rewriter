@@ -45,5 +45,6 @@
   "network_error": "ネットワークエラー",
   "output_file_placeholder": "自動生成の場合は空のままにしてください",
   "select_input_first": "まず入力ファイルを選択してください",
-  "parallel_mode": "パラレルモード（高速）"
+  "parallel_mode": "パラレルモード（高速）",
+  "output_language_hint": "書き換え後のテキストの言語"
 }

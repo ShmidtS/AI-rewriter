@@ -79,6 +79,7 @@ class RewriteParams:
     token: str | None = None
     parallel: bool = False
     max_workers: int | None = 10
+    output_language: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for legacy rewrite_process compatibility."""
@@ -96,6 +97,7 @@ class RewriteParams:
             "token": self.token,
             "parallel": self.parallel,
             "max_workers": self.max_workers,
+            "output_language": self.output_language,
         }
 
 

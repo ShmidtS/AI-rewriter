@@ -71,6 +71,10 @@ def rewrite_process(
     prompt_preset = params.get("prompt_preset", "literary")
     base_url = params.get("base_url", LOCAL_API_BASE_URL)
     token = params.get("token", LOCAL_API_TOKEN)
+    output_language = params.get("output_language", "")
+    # When output_language is explicitly set and differs from input language,
+    # use output_language as the target language for the rewrite prompt
+    target_language = output_language if output_language and output_language != language else language
 
     if stop_event is None:
         stop_event = threading.Event()
@@ -81,7 +85,7 @@ def rewrite_process(
     intermediate_file = os.path.join(output_dir, base_name + INTERMEDIATE_SUFFIX)
 
     _log(f"Start: {input_file} -> {output_file}")
-    _log(f"Language: {language} | Model: {model_name} | Preset: {prompt_preset}")
+    _log(f"Input language: {language} | Target language: {target_language} | Model: {model_name} | Preset: {prompt_preset}")
     if parallel:
         _log(f"Mode: PARALLEL (workers={max_workers if max_workers is not None else 'auto'})")
     else:
@@ -165,7 +169,7 @@ def rewrite_process(
             log_callback=log_callback,
             _log=_log,
             max_workers=max_workers,
-            language=language,
+            language=target_language,
             style=style,
             goal=goal,
             model_name=model_name,
@@ -236,7 +240,7 @@ def rewrite_process(
 
         system_instr = get_system_prompt(prompt_preset, min_len_api, max_len_api)
         user_content = create_rewrite_prompt(
-            language,
+            target_language,
             style,
             goal,
             block_text,

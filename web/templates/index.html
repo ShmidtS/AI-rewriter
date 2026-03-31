@@ -51,7 +51,7 @@
 
         <div class="form-row">
           <label>{{ tr('language') }}</label>
-            <select name="language" id="language">
+            <select name="output_language" id="output_language">
               {% for lang_opt in output_languages %}
                 <option value="{{ lang_opt }}" {% if lang_opt == '\u0420\u0443\u0441\u0441\u043a\u0438\u0439' %}selected{% endif %}>{{ lang_opt }}</option>
               {% endfor %}
