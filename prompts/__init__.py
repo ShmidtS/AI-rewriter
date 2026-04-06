@@ -13,14 +13,14 @@ from typing import Optional
 CATALOG_PATH = Path(__file__).parent / "catalog.json"
 
 # Cached catalog data
-_catalog_cache: Optional[dict] = None
+_catalog_cache: dict | None = None
 
 
 def load_catalog() -> dict:
     """Load and cache the prompt catalog from JSON file."""
     global _catalog_cache
     if _catalog_cache is None:
-        with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+        with open(CATALOG_PATH, encoding="utf-8") as f:
             _catalog_cache = json.load(f)
     return _catalog_cache
 
@@ -37,7 +37,7 @@ def get_all_prompts() -> list[dict]:
     return catalog.get("prompts", [])
 
 
-def get_prompt_by_id(prompt_id: str) -> Optional[dict]:
+def get_prompt_by_id(prompt_id: str) -> dict | None:
     """Get a specific prompt by its ID."""
     prompts = get_all_prompts()
     for prompt in prompts:
@@ -82,7 +82,7 @@ def get_prompt_preview(prompt_id: str, lang: str = "en") -> str:
     return ""
 
 
-def get_prompt_template(prompt_id: str) -> Optional[str]:
+def get_prompt_template(prompt_id: str) -> str | None:
     """Get the full template for a prompt."""
     prompt = get_prompt_by_id(prompt_id)
     if prompt:

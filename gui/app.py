@@ -2,24 +2,21 @@
 Tkinter GUI for AI Book Rewriter.
 Supports dark theme, i18n (ru/en/zh), prompt presets.
 """
+import logging
 import os
 import queue
-import logging
-import threading
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
-
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext, messagebox
+from pathlib import Path
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
 import sv_ttk
 
 from core.config import FINAL_SUFFIX, LOCAL_MODEL_NAME as DEFAULT_MODEL
-from core.services import RewriteService, ModelProvider, RewriteParams, RewriteStatus
-from core.services.rewrite_service import get_rewrite_service
+from core.services import ModelProvider, RewriteParams, RewriteService, RewriteStatus
 from core.services.model_provider import get_model_provider
-from core.prompts import get_preset_names
 from core.services.prompt_service import get_prompt_service
-from i18n import tr, set_language, get_supported_languages, get_output_languages
+from core.services.rewrite_service import get_rewrite_service
+from i18n import get_output_languages, get_supported_languages, set_language, tr
 
 logger = logging.getLogger(__name__)
 log_queue: queue.Queue = queue.Queue()

@@ -25,6 +25,27 @@ from core.text_engine import count_chars, validate_rewritten_text
 
 logger = logging.getLogger(__name__)
 
+# Global session for connection pooling
+_api_session: requests.Session | None = None
+_session_lock = threading.Lock()
+
+
+def get_api_session() -> requests.Session:
+    """Get or create global requests session with connection pooling (thread-safe)."""
+    global _api_session
+    if _api_session is None:
+        with _session_lock:
+            if _api_session is None:
+                _api_session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=10,
+                    pool_maxsize=20,
+                    max_retries=3,
+                )
+                _api_session.mount("http://", adapter)
+                _api_session.mount("https://", adapter)
+    return _api_session
+
 
 def parse_json_response(text: str) -> tuple[str | None, dict | None]:
     """Parse API response: JSON with rewritten_block/global_context, or plain text."""
@@ -48,7 +69,7 @@ def list_available_models(base_url: str = LOCAL_API_BASE_URL, token: str = LOCAL
     from core.config import LOCAL_MODEL_NAME
 
     try:
-        resp = requests.get(
+        resp = get_api_session().get(
             f"{base_url}/models",
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
@@ -130,7 +151,7 @@ def call_local_rewrite_api(
         try:
             # Use profile-specific timeout
             timeout = get_timeout() if base_url == LOCAL_API_BASE_URL else 300
-            response = requests.post(
+            response = get_api_session().post(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,

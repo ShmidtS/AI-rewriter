@@ -21,6 +21,7 @@ if str(_project_root) not in sys.path:
 def main():
     """Entry point for web interface."""
     import argparse
+
     from web.app import run_web
 
     parser = argparse.ArgumentParser(description="AI Book Rewriter - Web Interface")

@@ -381,6 +381,7 @@ def _rewrite_parallel(
 
     # Results storage: block_index -> rewritten_text, protected by a lock
     results_lock = threading.Lock()
+    _context_lock = threading.Lock()
     results: dict[int, str] = {}
 
     # Track which blocks are already done (from previous sessions)
@@ -428,6 +429,9 @@ def _rewrite_parallel(
         max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
 
         system_instr = get_system_prompt(prompt_preset, min_len_api, max_len_api)
+        # Thread-safe: copy global_context under lock to avoid race during read
+        with _context_lock:
+            context_snapshot = global_context.to_json()
         user_content = create_rewrite_prompt(
             language,
             style,
@@ -436,7 +440,7 @@ def _rewrite_parallel(
             prev_block_text,
             next_block_text,
             original_block_length,
-            global_context,
+            GlobalContext.from_json(context_snapshot),
         )
 
         result = call_local_rewrite_api(

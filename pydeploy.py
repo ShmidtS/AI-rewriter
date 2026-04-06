@@ -22,21 +22,19 @@ Ultimate Edition - Production Ready
     python pydeploy.py restore  -> Восстановление из резервной копии
 """
 
-import sys
-import subprocess
-import shutil
 import ast
+import json
 import logging
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import sysconfig
 import time
 import urllib.request
-import platform
-import sysconfig
-import os
-import json
-import hashlib
-from pathlib import Path
-from typing import List, Set, Dict, Tuple, Optional, Union
 from datetime import datetime
+from pathlib import Path
 
 VERSION = "5.0.0"
 VENV_NAME = ".venv"
@@ -108,7 +106,7 @@ else:
 
 # Импорт packages_distributions (с fallback)
 try:
-    from importlib.metadata import packages_distributions, distributions
+    from importlib.metadata import distributions, packages_distributions
 except ImportError:
     def packages_distributions():
         return {}
@@ -116,7 +114,7 @@ except ImportError:
         return []
 
 
-def run(cmd: List[str], cwd: Optional[Path] = None, capture: bool = True, 
+def run(cmd: list[str], cwd: Path | None = None, capture: bool = True,
         timeout: int = 300) -> subprocess.CompletedProcess:
     """Выполнение команды с обработкой ошибок"""
     if not cmd:
@@ -124,11 +122,11 @@ def run(cmd: List[str], cwd: Optional[Path] = None, capture: bool = True,
     
     try:
         return subprocess.run(
-            cmd, 
-            cwd=cwd or Path.cwd(), 
-            capture_output=capture, 
-            text=True, 
-            encoding="utf-8", 
+            cmd,
+            cwd=cwd or Path.cwd(),
+            capture_output=capture,
+            text=True,
+            encoding="utf-8",
             errors="replace",
             timeout=timeout,
             check=False
@@ -214,7 +212,7 @@ def ensure_uv():
         log.warning("Failed to install UV, will use pip as fallback")
 
 
-def run_uv(args: List[str], capture: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
+def run_uv(args: list[str], capture: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
     """Выполнение команды через uv"""
     uv = find_uv_executable()
     if uv == "uv" and not shutil.which("uv"):
@@ -249,17 +247,17 @@ def create_venv() -> bool:
     return False
 
 
-def get_stdlib() -> Set[str]:
+def get_stdlib() -> set[str]:
     """Получение списка модулей стандартной библиотеки"""
     stdlib = {
-        "abc", "argparse", "ast", "asyncio", "base64", "collections", "concurrent", 
-        "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal", "email", 
-        "enum", "functools", "glob", "gzip", "hashlib", "html", "http", "importlib", 
+        "abc", "argparse", "ast", "asyncio", "base64", "collections", "concurrent",
+        "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal", "email",
+        "enum", "functools", "glob", "gzip", "hashlib", "html", "http", "importlib",
         "inspect", "io", "itertools", "json", "logging", "math", "multiprocessing",
-        "operator", "os", "pathlib", "pickle", "platform", "pprint", "queue", "random", 
-        "re", "shutil", "signal", "socket", "sqlite3", "ssl", "stat", "string", "struct", 
-        "subprocess", "sys", "tempfile", "threading", "time", "tkinter", "tokenize", 
-        "traceback", "types", "typing", "unittest", "urllib", "uuid", "warnings", 
+        "operator", "os", "pathlib", "pickle", "platform", "pprint", "queue", "random",
+        "re", "shutil", "signal", "socket", "sqlite3", "ssl", "stat", "string", "struct",
+        "subprocess", "sys", "tempfile", "threading", "time", "tkinter", "tokenize",
+        "traceback", "types", "typing", "unittest", "urllib", "uuid", "warnings",
         "weakref", "xml", "zipfile", "zlib", "zoneinfo", "array", "binascii", "builtins",
         "cmath", "codecs", "crypt", "curses", "dbm", "difflib", "dis", "distutils",
         "fcntl", "filecmp", "fnmatch", "formatter", "fractions", "ftplib", "getopt",
@@ -285,13 +283,13 @@ def get_stdlib() -> Set[str]:
     return stdlib
 
 
-def load_cached_mapping() -> Dict[str, str]:
+def load_cached_mapping() -> dict[str, str]:
     """Загрузка кэшированного маппинга"""
     if not Path(CACHE_FILE).exists():
         return {}
     
     try:
-        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+        with open(CACHE_FILE, encoding='utf-8') as f:
             cache = json.load(f)
             # Проверяем срок давности кэша
             cache_time = cache.get('timestamp', 0)
@@ -303,7 +301,7 @@ def load_cached_mapping() -> Dict[str, str]:
     return {}
 
 
-def save_cached_mapping(mapping: Dict[str, str]) -> None:
+def save_cached_mapping(mapping: dict[str, str]) -> None:
     """Сохранение маппинга в кэш"""
     if not mapping:
         return
@@ -330,7 +328,7 @@ def validate_package_name(name: str) -> bool:
     return True
 
 
-def resolve_mapping(imports: Set[str]) -> List[str]:
+def resolve_mapping(imports: set[str]) -> list[str]:
     """Преобразование имён модулей в имена пакетов PyPI"""
     if not imports:
         return []
@@ -371,7 +369,7 @@ def resolve_mapping(imports: Set[str]) -> List[str]:
         try:
             with urllib.request.urlopen(REMOTE_MAPPING_URL, timeout=2.0) as r:
                 if r.status != 200:
-                    raise urllib.error.HTTPError(REMOTE_MAPPING_URL, r.status, 
+                    raise urllib.error.HTTPError(REMOTE_MAPPING_URL, r.status,
                                                 "HTTP Error", r.headers, None)
                 data = r.read().decode("utf-8")
                 for line in data.splitlines():
@@ -382,7 +380,7 @@ def resolve_mapping(imports: Set[str]) -> List[str]:
                 
                 # Сохраняем в кэш
                 save_cached_mapping(remote_mapping)
-        except (urllib.error.URLError, urllib.error.HTTPError, 
+        except (urllib.error.URLError, urllib.error.HTTPError,
                 TimeoutError, UnicodeDecodeError) as e:
             log.debug(f"Failed to fetch remote mapping: {e}")
             remote_mapping = cached_mapping
@@ -408,12 +406,12 @@ def resolve_mapping(imports: Set[str]) -> List[str]:
     return sorted(list(resolved))
 
 
-def scan_project() -> List[str]:
+def scan_project() -> list[str]:
     """Сканирование проекта на наличие импортов"""
     print_banner("Scanning Project Imports", Colors.BLUE)
     
     imports = set()
-    ignore = {VENV_NAME, "__pycache__", ".git", ".idea", ".vscode", 
+    ignore = {VENV_NAME, "__pycache__", ".git", ".idea", ".vscode",
               "build", "dist", ".pytest_cache", ".mypy_cache", "node_modules"}
     
     # Кэшируем имя текущего файла
@@ -466,7 +464,7 @@ def scan_project() -> List[str]:
     return packages
 
 
-def get_installed_packages() -> Dict[str, str]:
+def get_installed_packages() -> dict[str, str]:
     """Получение установленных пакетов с версиями"""
     result = run_uv(["pip", "freeze", "--python", str(VENV_PYTHON)], capture=True)
     
@@ -500,7 +498,7 @@ def get_installed_packages() -> Dict[str, str]:
     return packages
 
 
-def get_package_dependencies(package: str) -> Set[str]:
+def get_package_dependencies(package: str) -> set[str]:
     """Получение зависимостей конкретного пакета"""
     result = run([str(VENV_PYTHON), "-m", "pip", "show", package], capture=True)
     
@@ -522,7 +520,7 @@ def get_package_dependencies(package: str) -> Set[str]:
     return dependencies
 
 
-def build_dependency_tree() -> Dict[str, Set[str]]:
+def build_dependency_tree() -> dict[str, set[str]]:
     """Построение дерева зависимостей всех установленных пакетов"""
     installed = get_installed_packages()
     tree = {}
@@ -536,7 +534,7 @@ def build_dependency_tree() -> Dict[str, Set[str]]:
     return tree
 
 
-def find_orphaned_packages(required: List[str], installed: Dict[str, str]) -> List[str]:
+def find_orphaned_packages(required: list[str], installed: dict[str, str]) -> list[str]:
     """Поиск пакетов, которые не нужны (не используются и не являются зависимостями)"""
     if not installed:
         return []
@@ -574,7 +572,7 @@ def find_orphaned_packages(required: List[str], installed: Dict[str, str]) -> Li
     return sorted(list(orphaned))
 
 
-def prune_orphans(desired_packages: List[str]) -> None:
+def prune_orphans(desired_packages: list[str]) -> None:
     """Удаление неиспользуемых пакетов (Garbage Collection)"""
     print_banner("Pruning Unused Packages", Colors.YELLOW)
     
@@ -654,7 +652,7 @@ def install_package_atomic(package: str) -> bool:
     return False
 
 
-def sync_dependencies(packages: List[str], force_update: bool = False) -> None:
+def sync_dependencies(packages: list[str], force_update: bool = False) -> None:
     """Синхронизация зависимостей с lock файлом"""
     if not packages:
         print_status("ℹ", "No packages to install", Colors.CYAN)
@@ -688,9 +686,9 @@ def sync_dependencies(packages: List[str], force_update: bool = False) -> None:
     temp_req.write_text("\n".join(packages), encoding="utf-8")
     
     compile_cmd = [
-        "pip", "compile", 
-        str(temp_req), 
-        "-o", LOCK_FILE, 
+        "pip", "compile",
+        str(temp_req),
+        "-o", LOCK_FILE,
         "--python", str(VENV_PYTHON),
         "--generate-hashes"  # Добавляем хеши для безопасности
     ]
@@ -713,8 +711,8 @@ def sync_dependencies(packages: List[str], force_update: bool = False) -> None:
     print_banner("Synchronizing Environment", Colors.BLUE)
     
     sync_cmd = [
-        "pip", "sync", 
-        LOCK_FILE, 
+        "pip", "sync",
+        LOCK_FILE,
         "--python", str(VENV_PYTHON)
     ]
     
@@ -728,7 +726,7 @@ def sync_dependencies(packages: List[str], force_update: bool = False) -> None:
         install_robust_direct(packages)
 
 
-def install_robust_direct(packages: List[str]) -> None:
+def install_robust_direct(packages: list[str]) -> None:
     """Аварийная установка без lock-файла (атомарная установка каждого пакета)"""
     print_banner("ATOMIC FALLBACK INSTALL", Colors.YELLOW)
     
@@ -800,7 +798,7 @@ def verify_env() -> None:
     print_status("🔍", "Running smoke tests...", Colors.CYAN)
     
     installed = get_installed_packages()
-    test_packages = [pkg for pkg in ['requests', 'numpy', 'pandas', 'flask'] 
+    test_packages = [pkg for pkg in ['requests', 'numpy', 'pandas', 'flask']
                      if pkg in installed]
     
     if test_packages:
@@ -853,7 +851,7 @@ def create_backup() -> None:
     print_status("ℹ", f"Saved {len(installed)} packages", Colors.CYAN)
 
 
-def list_backups() -> List[Path]:
+def list_backups() -> list[Path]:
     """Список доступных резервных копий"""
     backup_dir = Path(BACKUP_DIR)
     if not backup_dir.exists():
@@ -874,7 +872,7 @@ def restore_backup() -> None:
     print("Available backups:")
     for idx, backup in enumerate(backups, 1):
         try:
-            with open(backup, 'r', encoding='utf-8') as f:
+            with open(backup, encoding='utf-8') as f:
                 data = json.load(f)
                 timestamp = data.get('timestamp', 'unknown')
                 pkg_count = len(data.get('packages', {}))
@@ -895,7 +893,7 @@ def restore_backup() -> None:
     backup_file = backups[choice - 1]
     
     try:
-        with open(backup_file, 'r', encoding='utf-8') as f:
+        with open(backup_file, encoding='utf-8') as f:
             data = json.load(f)
         
         packages = data.get('packages', {})
@@ -911,7 +909,7 @@ def restore_backup() -> None:
         temp_req.write_text("\n".join(requirements), encoding="utf-8")
         
         # Устанавливаем
-        result = run([str(VENV_PYTHON), "-m", "pip", "install", "-r", str(temp_req)], 
+        result = run([str(VENV_PYTHON), "-m", "pip", "install", "-r", str(temp_req)],
                     capture=False, timeout=600)
         
         temp_req.unlink(missing_ok=True)
