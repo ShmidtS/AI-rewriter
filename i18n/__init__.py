@@ -7,45 +7,46 @@ tr('start') # -> 'Start'
 """
 import json
 import os
-from typing import Any
+from typing import Any, cast
 
-_TRANSLATIONS: dict = {}
+_TRANSLATIONS: dict[str, str] = {}
 _CURRENT_LANG: str = "ru"
 _FALLBACK_LANG: str = "en"
 _LANG_DIR: str = os.path.dirname(__file__)
 
 # Cache for loaded configuration
-_SUPPORTED_LANGS_CACHE: dict | None = None
-_OUTPUT_LANGS_CACHE: list | None = None
+_SUPPORTED_LANGS_CACHE: dict[str, str] | None = None
+_OUTPUT_LANGS_CACHE: list[str] | None = None
 
 
-def _load_json(filename: str) -> dict:
+def _load_json(filename: str) -> dict[str, str]:
     """Load a JSON file from the i18n directory."""
     path = os.path.join(_LANG_DIR, filename)
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(dict[str, str], json.load(f))
 
 
-def _load(lang: str) -> dict:
+def _load(lang: str) -> dict[str, str]:
     path = os.path.join(_LANG_DIR, f"{lang}.json")
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(dict[str, str], json.load(f))
 
 
-def _load_supported_languages() -> dict:
+def _load_supported_languages() -> dict[str, str]:
     """Load supported interface languages from JSON config."""
     global _SUPPORTED_LANGS_CACHE
     if _SUPPORTED_LANGS_CACHE is None:
         config = _load_json("supported_languages.json")
-        _SUPPORTED_LANGS_CACHE = config.get("languages", {"ru": "Русский", "en": "English", "zh": "中文"})
+        languages = cast(dict[str, str], config.get("languages", {"ru": "Русский", "en": "English", "zh": "中文"}))
+        _SUPPORTED_LANGS_CACHE = languages
     return _SUPPORTED_LANGS_CACHE
 
 
-def get_supported_languages() -> dict:
+def get_supported_languages() -> dict[str, str]:
     """
     Get dictionary of supported interface languages.
     Returns: {"ru": "Русский", "en": "English", "zh": "中文"}
@@ -53,7 +54,7 @@ def get_supported_languages() -> dict:
     return _load_supported_languages()
 
 
-def get_output_languages() -> list:
+def get_output_languages() -> list[str]:
     """
     Get list of available output/translation languages.
     Returns: ["Русский", "English", "Español", ...]
@@ -61,14 +62,15 @@ def get_output_languages() -> list:
     global _OUTPUT_LANGS_CACHE
     if _OUTPUT_LANGS_CACHE is None:
         config = _load_json("output_languages.json")
-        _OUTPUT_LANGS_CACHE = config.get("languages", [
+        languages = cast(list[str], config.get("languages", [
             "Русский", "English", "Español", "Français", "Deutsch",
             "Italiano", "Português", "中文", "日本語", "한국어",
             "العربية", "हिन्दी", "Türkçe", "Polski", "Nederlands",
             "Svenska", "Norsk", "Dansk", "Suomi", "Čeština",
             "Slovenčina", "Magyar", "Română", "Български", "Українська",
             "Ελληνικά", "עברית", "ไทย", "Tiếng Việt", "Bahasa Indonesia",
-        ])
+        ]))
+        _OUTPUT_LANGS_CACHE = languages
     return _OUTPUT_LANGS_CACHE
 
 
@@ -86,7 +88,7 @@ def set_language(lang: str) -> None:
 
 
 def tr(key: str, **kwargs: Any) -> str:
-    template = _TRANSLATIONS.get(key, key)
+    template: str = _TRANSLATIONS.get(key, key)
     if kwargs:
         try:
             return template.format(**kwargs)

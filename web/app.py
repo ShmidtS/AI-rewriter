@@ -76,6 +76,7 @@ app = create_app()
 def _broadcast(event: str, data: dict):
     """Push SSE event to all connected clients."""
     msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    assert _job_lock is not None
     with _job_lock:
         for q in list(_event_queues):
             try:
@@ -87,6 +88,7 @@ def _broadcast(event: str, data: dict):
 def _progress_cb(current: int, total: int):
     pct = (current / total * 100) if total > 0 else 0
     _broadcast("progress", {"current": current, "total": total, "pct": round(pct, 1)})
+    assert _job_lock is not None
     with _job_lock:
         if _active_job:
             _active_job["current"] = current
@@ -252,6 +254,7 @@ def api_download(filename):
 def events():
     """SSE endpoint for real-time progress and logs."""
     q: queue.Queue = queue.Queue(maxsize=200)
+    assert _job_lock is not None
     with _job_lock:
         _event_queues.append(q)
 
@@ -267,6 +270,7 @@ def events():
                 except queue.Empty:
                     yield "event: ping\ndata: {}\n\n"
         finally:
+            assert _job_lock is not None
             with _job_lock:
                 try:
                     _event_queues.remove(q)

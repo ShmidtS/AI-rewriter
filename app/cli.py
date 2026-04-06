@@ -27,6 +27,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # Ensure project root is in sys.path
 _project_root = Path(__file__).resolve().parent.parent
@@ -201,7 +202,7 @@ def main():
         print()
 
     # Progress callback with tqdm or text fallback
-    state = {"total": 0, "last_done": 0, "last_pct": -1, "pbar": None}
+    state: dict[str, Any] = {"total": 0, "last_done": 0, "last_pct": -1, "pbar": None}
 
     def _progress(current, total):
         if args.quiet:

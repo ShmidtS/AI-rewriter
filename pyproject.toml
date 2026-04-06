@@ -91,6 +91,11 @@ module = "core.rewriter"
 warn_return_any = false
 disable_error_code = ["arg-type", "index", "union-attr", "misc"]
 
+# Legacy files - exclude from strict type checking
+[[tool.mypy.overrides]]
+module = ["pydeploy", "test"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
