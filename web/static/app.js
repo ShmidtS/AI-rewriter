@@ -1,6 +1,8 @@
 /* AI Book Rewriter – Web Frontend (Main Module) */
 'use strict';
 
+(function () {
+
 // ── Toast Notifications ─────────────────────────────────────────────────────
 const ToastManager = {
     container: null,
@@ -33,19 +35,27 @@ const ToastManager = {
             info: 'ℹ'
         };
         
-        toast.innerHTML = `
-            <span class="toast-icon">${icons[type] || 'ℹ'}</span>
-            <span class="toast-message">${message}</span>
-            <button class="toast-close" aria-label="Close">&times;</button>
-        `;
-        
+        const icon = document.createElement('span');
+        icon.className = 'toast-icon';
+        icon.textContent = icons[type] || 'ℹ';
+
+        const messageEl = document.createElement('span');
+        messageEl.className = 'toast-message';
+        messageEl.textContent = message;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.setAttribute('aria-label', 'Close');
+        closeBtn.textContent = '×';
+
+        toast.append(icon, messageEl, closeBtn);
         this.container.appendChild(toast);
-        
+
         // Trigger animation
         requestAnimationFrame(() => toast.classList.add('toast-show'));
-        
+
         // Close button
-        toast.querySelector('.toast-close').addEventListener('click', () => {
+        closeBtn.addEventListener('click', () => {
             this._remove(toast);
         });
         
@@ -98,7 +108,12 @@ const SkeletonManager = {
     showSelectSkeleton(select) {
         if (!select) return;
         select.classList.add('skeleton-select');
-        select.innerHTML = '<option value="" class="skeleton-option">████████</option>';
+        select.replaceChildren();
+        const option = document.createElement('option');
+        option.value = '';
+        option.className = 'skeleton-option';
+        option.textContent = '████████';
+        select.appendChild(option);
     },
     
     /**
@@ -208,8 +223,16 @@ const FormValidator = {
 // ── SSE Connection ──────────────────────────────────────────────────────────
 let evtSource = null;
 let sseReconnectAttempts = 0;
+let sseReconnectTimer = null;
 const SSE_MAX_RECONNECT_DELAY = 30000; // max 30s between reconnects
 const SSE_BASE_RECONNECT_DELAY = 3000;
+
+function clearSseReconnectTimer() {
+    if (sseReconnectTimer) {
+        clearTimeout(sseReconnectTimer);
+        sseReconnectTimer = null;
+    }
+}
 
 function updateSseStatus(connected) {
     const el = document.getElementById('sse-status');
@@ -223,8 +246,16 @@ function updateSseStatus(connected) {
     }
 }
 
+function closeSSE() {
+    clearSseReconnectTimer();
+    if (evtSource) {
+        evtSource.close();
+        evtSource = null;
+    }
+}
+
 function connectSSE() {
-    if (evtSource) evtSource.close();
+    closeSSE();
     evtSource = new EventSource('/events');
 
     evtSource.addEventListener('status', e => {
@@ -248,6 +279,7 @@ function connectSSE() {
     });
 
     evtSource.onopen = () => {
+        clearSseReconnectTimer();
         ViewModel.setConnected(true);
         updateSseStatus(true);
         sseReconnectAttempts = 0; // reset on successful connection
@@ -262,7 +294,8 @@ function connectSSE() {
             SSE_BASE_RECONNECT_DELAY * Math.pow(2, sseReconnectAttempts - 1),
             SSE_MAX_RECONNECT_DELAY
         );
-        setTimeout(connectSSE, delay);
+        clearSseReconnectTimer();
+        sseReconnectTimer = setTimeout(connectSSE, delay);
     };
 }
 
@@ -281,6 +314,8 @@ function syncStatus(data) {
 }
 
 // ── Log ───────────────────────────────────────────────────────────────────────
+const MAX_LOG_ENTRIES = 500;
+
 function appendLog(msg) {
     const area = document.getElementById('log-area');
     if (!area) return;
@@ -295,12 +330,15 @@ function appendLog(msg) {
     const ts = new Date().toLocaleTimeString();
     div.textContent = `[${ts}] ${msg}`;
     area.appendChild(div);
+    while (area.children.length > MAX_LOG_ENTRIES) {
+        area.firstElementChild?.remove();
+    }
     area.scrollTop = area.scrollHeight;
 }
 
 function clearLog() {
     const area = document.getElementById('log-area');
-    if (area) area.innerHTML = '';
+    if (area) area.replaceChildren();
 }
 
 // ── Done handler ─────────────────────────────────────────────────────────────
@@ -326,7 +364,7 @@ async function refreshModels() {
         const models = await API.getModels();
         ViewModel.setModels(models);
         
-        sel.innerHTML = '';
+        sel.replaceChildren();
         models.forEach(m => {
             const opt = document.createElement('option');
             opt.value = opt.textContent = m;
@@ -356,7 +394,7 @@ async function loadPrompts(lang) {
         const prompts = await API.getPrompts(lang);
         ViewModel.setPrompts(prompts);
         
-        sel.innerHTML = '';
+        sel.replaceChildren();
         prompts.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
@@ -381,11 +419,15 @@ function updatePromptPreview() {
     const selectedId = sel.value;
     const prompt = ViewModel.getPromptById(selectedId);
 
+    previewEl.replaceChildren();
     if (prompt) {
-        previewEl.innerHTML = '<strong>' + prompt.name + '</strong><br>' +
-            '<span class="prompt-desc">' + (prompt.description || '') + '</span>';
-    } else {
-        previewEl.innerHTML = '';
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = prompt.name;
+        const lineBreak = document.createElement('br');
+        const descEl = document.createElement('span');
+        descEl.className = 'prompt-desc';
+        descEl.textContent = prompt.description || '';
+        previewEl.append(nameEl, lineBreak, descEl);
     }
 }
 
@@ -416,22 +458,29 @@ async function loadPromptPresets() {
 
     // Show skeleton
     card.style.display = 'block';
-    grid.innerHTML = '<div class="preset-skeleton"></div>'.repeat(6);
+    grid.replaceChildren();
+    const skeletons = document.createDocumentFragment();
+    for (let i = 0; i < 6; i++) {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'preset-skeleton';
+        skeletons.appendChild(skeleton);
+    }
+    grid.appendChild(skeletons);
 
     try {
-        const [promptsResp, catsResp] = await Promise.all([
-            fetch(`/api/prompts?lang=${lang}`),
-            fetch(`/api/prompts/categories?lang=${lang}`)
+        const [prompts, categories] = await Promise.all([
+            API.getPrompts(lang),
+            API.getPromptCategories(lang)
         ]);
 
-        if (promptsResp.ok) allPresets = await promptsResp.json();
-        if (catsResp.ok) presetCategories = await catsResp.json();
+        allPresets = prompts;
+        presetCategories = categories;
 
         renderCategoryFilter();
         renderPresetTiles();
     } catch (e) {
         ToastManager.error('Failed to load prompt presets');
-        grid.innerHTML = '';
+        grid.replaceChildren();
     }
 }
 
@@ -439,7 +488,7 @@ function renderCategoryFilter() {
     const container = document.getElementById('category-filter');
     if (!container) return;
 
-    container.innerHTML = '';
+    container.replaceChildren();
 
     // "All" chip
     const allChip = document.createElement('button');
@@ -472,14 +521,18 @@ function renderPresetTiles() {
     const grid = document.getElementById('prompts-grid');
     if (!grid) return;
 
-    grid.innerHTML = '';
+    grid.replaceChildren();
 
     const filtered = activeCategory === 'all'
         ? allPresets
         : allPresets.filter(p => p.category === activeCategory);
 
     if (filtered.length === 0) {
-        grid.innerHTML = '<p style="color:var(--text-dim);grid-column:1/-1;">No presets available</p>';
+        const empty = document.createElement('p');
+        empty.style.color = 'var(--text-dim)';
+        empty.style.gridColumn = '1/-1';
+        empty.textContent = 'No presets available';
+        grid.appendChild(empty);
         return;
     }
 
@@ -492,11 +545,21 @@ function renderPresetTiles() {
         tile.className = 'preset-tile';
         if (p.id === selectedId) tile.classList.add('selected');
 
-        tile.innerHTML = `
-            <div class="preset-tile-name">${escapeHtml(p.name || p.id)}</div>
-            <div class="preset-tile-desc">${escapeHtml(p.description || '')}</div>
-            ${p.category ? `<div class="preset-tile-category">${escapeHtml(p.category)}</div>` : ''}
-        `;
+        const nameEl = document.createElement('div');
+        nameEl.className = 'preset-tile-name';
+        nameEl.textContent = p.name || p.id;
+
+        const descEl = document.createElement('div');
+        descEl.className = 'preset-tile-desc';
+        descEl.textContent = p.description || '';
+
+        tile.append(nameEl, descEl);
+        if (p.category) {
+            const categoryEl = document.createElement('div');
+            categoryEl.className = 'preset-tile-category';
+            categoryEl.textContent = p.category;
+            tile.appendChild(categoryEl);
+        }
 
         tile.addEventListener('click', () => {
             // Update the select dropdown
@@ -513,14 +576,9 @@ function renderPresetTiles() {
     });
 }
 
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
 // ── Stop ──────────────────────────────────────────────────────────────────────
 async function stopJob() {
+    closeSSE();
     try {
         await API.stopJob();
         ToastManager.info(ViewModel.t('stop_requested') || 'Stop requested');
@@ -650,6 +708,41 @@ const UIRenderer = {
     }
 };
 
+const App = Object.freeze({
+    clearLog,
+    refreshModels,
+    loadPromptPresets,
+    stopJob,
+    suggestOutputName
+});
+
+function bindActionButton(id, handler) {
+    const button = document.getElementById(id);
+    if (button) button.addEventListener('click', handler);
+}
+
+function bindActionButtons() {
+    bindActionButton('clear-input-file-btn', () => {
+        const input = document.getElementById('input_file');
+        const fileName = document.getElementById('file-name');
+        if (input) input.value = '';
+        if (fileName) fileName.textContent = '—';
+        input?.focus();
+    });
+    bindActionButton('clear-output-file-btn', () => {
+        const input = document.getElementById('output_file');
+        if (input) { input.value = ''; input.focus(); }
+    });
+    bindActionButton('suggest-output-btn', App.suggestOutputName);
+    bindActionButton('refresh-models-btn', App.refreshModels);
+    bindActionButton('stop-btn', App.stopJob);
+    bindActionButton('refresh-prompts-btn', App.loadPromptPresets);
+    bindActionButton('clear-log-btn', App.clearLog);
+}
+
+window.AIRewriterApp = App;
+window.addEventListener('beforeunload', closeSSE);
+
 // ── Form submit ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     // Initialize components
@@ -657,6 +750,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     UIRenderer.init();
     
     await initI18n();
+    bindActionButtons();
 
     // File name display
     const fileInput = document.getElementById('input_file');
@@ -736,3 +830,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     initPromptSelector();
     loadPromptPresets();
 });
+
+})();

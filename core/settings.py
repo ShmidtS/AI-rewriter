@@ -92,6 +92,29 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
+    # API Security / Timeout Settings
+    # =========================================================================
+    allow_private_endpoints: bool = Field(
+        default=True,
+        alias="ALLOW_PRIVATE_ENDPOINTS",
+        description="Allow API endpoints resolving to private or link-local addresses",
+    )
+    api_timeout: int = Field(
+        default=60,
+        ge=1,
+        le=600,
+        alias="API_TIMEOUT",
+        description="Default API request timeout in seconds",
+    )
+    api_rewrite_timeout: int = Field(
+        default=120,
+        ge=1,
+        le=1800,
+        alias="API_REWRITE_TIMEOUT",
+        description="Timeout for long rewrite API calls in seconds",
+    )
+
+    # =========================================================================
     # Model Settings (MODEL_* prefix)
     # =========================================================================
     model_name: str = Field(
@@ -284,9 +307,11 @@ class Settings(BaseSettings):
 
     def get_timeout(self) -> int:
         """Get appropriate timeout based on connection profile."""
+        if self.api_rewrite_timeout != 120:
+            return self.api_rewrite_timeout
         if self.connection_profile in (ConnectionProfile.PROXY, ConnectionProfile.AUTO):
-            return self.proxy_timeout_read_streaming
-        return 300  # Default 5 minutes for direct
+            return min(self.proxy_timeout_read_streaming, 120)
+        return 120
 
     def is_proxy_mode(self) -> bool:
         """Check if proxy mode is active."""

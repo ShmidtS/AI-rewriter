@@ -11,13 +11,12 @@ import logging
 
 import requests
 
-from core.services.interfaces import IModelProvider
 from core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
 
-class ModelProvider(IModelProvider):
+class ModelProvider:
     """
     Service for model discovery and API validation.
 

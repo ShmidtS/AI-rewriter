@@ -15,6 +15,7 @@
   "status_ready": "Готов",
   "status_running": "Обработка: {current}/{total} ({pct:.1f}%)",
   "status_done": "Завершено",
+  "status_failed": "Ошибка",
   "status_stopped": "Остановлено",
   "status_starting": "Запуск...",
   "status_stopping": "Остановка...",

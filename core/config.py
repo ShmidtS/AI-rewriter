@@ -30,6 +30,10 @@ LOCAL_CONTEXT_WINDOW: int = _settings.get_context_window()
 # Max output tokens - uses MODEL_MAX_OUTPUT_TOKENS or legacy MAX_OUTPUT_TOKENS
 LOCAL_MAX_OUTPUT_TOKENS: int = _settings.get_max_output_tokens()
 
+# SSRF protection and request timeouts
+ALLOW_PRIVATE_ENDPOINTS: bool = _settings.allow_private_endpoints
+API_TIMEOUT: int = _settings.api_timeout
+
 # =============================================================================
 # Text Processing Constants
 # =============================================================================
@@ -127,6 +131,8 @@ __all__ = [
     "ADAPTIVE_TEMPERATURE_BASE",
     "ADAPTIVE_TEMPERATURE_MAX",
     "ADAPTIVE_TEMPERATURE_MIN",
+    "ALLOW_PRIVATE_ENDPOINTS",
+    "API_TIMEOUT",
     "BLOCK_TARGET_CHARS",
     "END_MARKER",
     "FINAL_SUFFIX",

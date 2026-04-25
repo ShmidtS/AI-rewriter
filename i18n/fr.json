@@ -15,6 +15,7 @@
   "status_ready": "Prêt",
   "status_running": "Traitement : {current}/{total} ({pct:.1f}%)",
   "status_done": "Terminé",
+  "status_failed": "Échec",
   "status_stopped": "Arrêté",
   "status_starting": "Démarrage...",
   "status_stopping": "Arrêt en cours...",

@@ -277,49 +277,54 @@ class BookRewriterApp:
     
     # ── Start / Stop ──────────────────────────────────────────────────────────
     def _start(self):
-        input_file = self.input_var.get().strip()
-        if not input_file:
-            messagebox.showerror(tr("app_title"), tr("error_fill_fields"))
-            return
-        if not os.path.exists(input_file):
-            messagebox.showerror(tr("app_title"), tr("error_file_not_found", path=input_file))
-            return
-    
-        # Use user-specified output file or auto-generate
-        output_file = self.output_var.get().strip()
-        if not output_file:
-            stem = Path(input_file).stem
-            output_file = str(Path(input_file).parent / (stem + FINAL_SUFFIX))
-    
-        params = RewriteParams(
-            input_file=input_file,
-            output_file=output_file,
-            language=self.lang_var.get(),
-            output_language=self.lang_var.get(),
-            style=self.style_text.get("1.0", tk.END).strip(),
-            goal=self.goal_text.get("1.0", tk.END).strip(),
-            model=self.model_var.get(),
-            resume=self.resume_var.get(),
-            parallel=self.parallel_var.get(),
-            max_workers=10,
-            save_interval=1,
-            prompt_preset=self.preset_var.get(),
-        )
+        try:
+            input_file = self.input_var.get().strip()
+            if not input_file:
+                messagebox.showerror(tr("app_title"), tr("error_fill_fields"))
+                return
+            if not os.path.exists(input_file):
+                messagebox.showerror(tr("app_title"), tr("error_file_not_found", path=input_file))
+                return
 
-        self.start_btn["state"] = tk.DISABLED
-        self.stop_btn["state"] = tk.NORMAL
-        self.status_var.set(tr("status_starting"))
-        self.progress["value"] = 0
+            # Use user-specified output file or auto-generate
+            output_file = self.output_var.get().strip()
+            if not output_file:
+                stem = Path(input_file).stem
+                output_file = str(Path(input_file).parent / (stem + FINAL_SUFFIX))
 
-        started = self._rewrite_service.start_rewrite(
-            params=params,
-            progress_callback=self._progress_safe,
-        )
-        
-        if not started:
-            messagebox.showerror(tr("app_title"), "Failed to start rewrite")
+            params = RewriteParams(
+                input_file=input_file,
+                output_file=output_file,
+                language=self.lang_var.get(),
+                output_language=self.lang_var.get(),
+                style=self.style_text.get("1.0", tk.END).strip(),
+                goal=self.goal_text.get("1.0", tk.END).strip(),
+                model=self.model_var.get(),
+                resume=self.resume_var.get(),
+                parallel=self.parallel_var.get(),
+                max_workers=10,
+                save_interval=1,
+                prompt_preset=self.preset_var.get(),
+            )
+
+            self.start_btn["state"] = tk.DISABLED
+            self.stop_btn["state"] = tk.NORMAL
+            self.status_var.set(tr("status_starting"))
+            self.progress["value"] = 0
+
+            started = self._rewrite_service.start_rewrite(
+                params=params,
+                progress_callback=self._progress_safe,
+            )
+
+            if not started:
+                raise RuntimeError("Failed to start rewrite")
+        except (OSError, ValueError, RuntimeError, tk.TclError) as exc:
+            logger.exception("Failed to start rewrite")
             self.start_btn["state"] = tk.NORMAL
             self.stop_btn["state"] = tk.DISABLED
+            self.status_var.set(tr("status_ready"))
+            messagebox.showerror(tr("app_title"), str(exc))
 
     def _stop(self):
         if self._rewrite_service.is_running():
@@ -357,7 +362,7 @@ class BookRewriterApp:
             if status.status == RewriteStatus.STOPPED:
                 final = tr("status_stopped")
             elif status.status == RewriteStatus.FAILED:
-                final = tr("status_done") + f" ({status.error_message or 'error'})"
+                final = tr("status_failed") + f" ({status.error_message or 'error'})"
             else:
                 final = tr("status_done")
             self.status_var.set(final)

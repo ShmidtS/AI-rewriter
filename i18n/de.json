@@ -15,6 +15,7 @@
   "status_ready": "Bereit",
   "status_running": "Verarbeitung: {current}/{total} ({pct:.1f}%)",
   "status_done": "Fertig",
+  "status_failed": "Fehlgeschlagen",
   "status_stopped": "Gestoppt",
   "status_starting": "Starten...",
   "status_stopping": "Stoppen...",

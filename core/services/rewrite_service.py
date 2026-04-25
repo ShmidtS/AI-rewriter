@@ -8,20 +8,16 @@ backward compatibility with core.rewriter.rewrite_process().
 import logging
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from core.rewriter import rewrite_process
-from core.services.interfaces import (
-    IRewriteService,
-    ProgressInfo,
-    RewriteParams,
-    RewriteStatus,
-)
+from core.services.interfaces import ProgressInfo, RewriteParams, RewriteStatus
 from core.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
 
-class RewriteService(IRewriteService):
+class RewriteService:
     """
     High-level service for managing rewrite operations.
 
@@ -82,12 +78,12 @@ class RewriteService(IRewriteService):
             )
 
             # Apply settings to params if not explicitly set
-            params_dict = params.to_dict()
-            if params_dict.get("base_url") is None:
+            params_dict: dict[str, Any] = params.to_dict()
+            if params.base_url is None:
                 params_dict["base_url"] = self._settings.get_api_base_url()
-            if params_dict.get("token") is None:
+            if params.token is None:
                 params_dict["token"] = self._settings.get_api_key()
-            if not params_dict.get("rewriter_model"):
+            if not params.model:
                 params_dict["rewriter_model"] = self._settings.get_model_name()
 
             # Start rewrite thread
@@ -148,7 +144,7 @@ class RewriteService(IRewriteService):
         self._thread.join(timeout=timeout)
         return not self._thread.is_alive()
 
-    def _run_rewrite(self, params: dict) -> None:
+    def _run_rewrite(self, params: dict[str, Any]) -> None:
         """
         Internal method to run rewrite in a thread.
 

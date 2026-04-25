@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{{ tr('app_title') }}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -32,25 +33,25 @@
         <input type="hidden" name="lang" value="{{ lang }}">
 
         <div class="form-row">
-          <label>{{ tr('input_file') }}</label>
+          <label for="input_file">{{ tr('input_file') }}</label>
           <div class="file-input-wrap">
             <input type="file" id="input_file" name="input_file" accept=".txt" required>
             <span id="file-name" class="file-name-display">&mdash;</span>
-            <button type="button" class="clear-btn-inline" data-target="input_file" title="Clear selection" onclick="document.getElementById('input_file').value='';document.getElementById('file-name').textContent='&mdash;'">&#10005;</button>
+            <button type="button" id="clear-input-file-btn" class="clear-btn-inline" data-target="input_file" title="Clear selection" aria-label="Clear selected input file">&#10005;</button>
           </div>
         </div>
 
         <div class="form-row">
-          <label>{{ tr('output_file') }}</label>
+          <label for="output_file">{{ tr('output_file') }}</label>
           <div class="file-input-wrap">
             <input type="text" id="output_file" name="output_file" placeholder="{{ tr('output_file_placeholder') }}">
-            <button class="clear-btn-inline" data-target="output_file" title="Clear" onclick="document.getElementById('output_file').value=''">&#10005;</button>
-            <button type="button" class="btn btn-sm btn-secondary" onclick="suggestOutputName()">&#8634;</button>
+            <button type="button" id="clear-output-file-btn" class="clear-btn-inline" data-target="output_file" title="Clear" aria-label="Clear output file">&#10005;</button>
+            <button type="button" id="suggest-output-btn" class="btn btn-sm btn-secondary" aria-label="Suggest output filename">&#8634;</button>
           </div>
         </div>
 
         <div class="form-row">
-          <label>{{ tr('language') }}</label>
+          <label for="output_language">{{ tr('language') }}</label>
             <select name="output_language" id="output_language">
               {% for lang_opt in output_languages %}
                 <option value="{{ lang_opt }}" {% if lang_opt == '\u0420\u0443\u0441\u0441\u043a\u0438\u0439' %}selected{% endif %}>{{ lang_opt }}</option>
@@ -59,17 +60,17 @@
         </div>
 
         <div class="form-row">
-          <label>{{ tr('model') }}</label>
+          <label for="model">{{ tr('model') }}</label>
           <select name="model" id="model">
             {% for m in models %}
               <option value="{{ m }}">{{ m }}</option>
             {% endfor %}
           </select>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="refreshModels()">&#8635;</button>
+          <button type="button" id="refresh-models-btn" class="btn btn-sm btn-secondary" aria-label="Refresh models">&#8635;</button>
         </div>
 
         <div class="form-row">
-          <label>{{ tr('prompt_preset') }}</label>
+          <label for="prompt_preset">{{ tr('prompt_preset') }}</label>
           <div class="prompt-select-wrap">
             <select name="prompt_preset" id="prompt_preset">
               {% for key, label in presets.items() %}
@@ -80,37 +81,37 @@
         </div>
 
         <div class="form-row" id="prompt-preview-row">
-          <label></label>
+          <span aria-hidden="true"></span>
           <div id="prompt-preview" class="prompt-preview"></div>
         </div>
 
         <div class="form-row align-top">
-          <label>{{ tr('style') }}</label>
+          <label for="style">{{ tr('style') }}</label>
           <div class="clearable-wrap">
             <textarea name="style" id="style" rows="3" placeholder="{{ tr('default_style') }}">{{ tr('default_style') }}</textarea>
-            <button type="button" class="clear-btn" data-target="style" title="Clear">&#10005;</button>
+            <button type="button" class="clear-btn" data-target="style" title="Clear" aria-label="Clear style">&#10005;</button>
           </div>
         </div>
 
         <div class="form-row align-top">
-          <label>{{ tr('goal') }}</label>
+          <label for="goal">{{ tr('goal') }}</label>
           <div class="clearable-wrap">
             <textarea name="goal" id="goal" rows="4" placeholder="{{ tr('default_goal') }}">{{ tr('default_goal') }}</textarea>
-            <button type="button" class="clear-btn" data-target="goal" title="Clear">&#10005;</button>
+            <button type="button" class="clear-btn" data-target="goal" title="Clear" aria-label="Clear goal">&#10005;</button>
           </div>
         </div>
 
         <div class="form-row">
-          <label>{{ tr('resume') }}</label>
-          <label class="toggle">
+          <label for="resume">{{ tr('resume') }}</label>
+          <label class="toggle" for="resume">
             <input type="checkbox" name="resume" id="resume" checked>
             <span class="toggle-slider"></span>
           </label>
         </div>
 
         <div class="form-row">
-          <label>{{ tr('parallel_mode') }}</label>
-          <label class="toggle">
+          <label for="parallel_mode">{{ tr('parallel_mode') }}</label>
+          <label class="toggle" for="parallel_mode">
             <input type="checkbox" name="parallel_mode" id="parallel_mode">
             <span class="toggle-slider"></span>
           </label>
@@ -118,7 +119,7 @@
 
         <div class="form-actions">
           <button type="submit" id="start-btn" class="btn btn-primary">&#9654; {{ tr('start') }}</button>
-          <button type="button" id="stop-btn" class="btn btn-danger" disabled onclick="stopJob()">&#9646;&#9646; {{ tr('stop') }}</button>
+          <button type="button" id="stop-btn" class="btn btn-danger" disabled>&#9646;&#9646; {{ tr('stop') }}</button>
         </div>
       </form>
     </div>
@@ -127,7 +128,7 @@
     <div class="prompts-card" id="prompts-card" style="display:none;">
       <div class="prompts-header">
         <span>&#128214; Prompt Presets</span>
-        <button type="button" class="btn btn-sm btn-secondary" onclick="loadPromptPresets()" title="Refresh">&#8635;</button>
+        <button type="button" id="refresh-prompts-btn" class="btn btn-sm btn-secondary" title="Refresh" aria-label="Refresh prompt presets">&#8635;</button>
       </div>
       <div class="category-filter" id="category-filter"></div>
       <div class="prompts-body" id="prompts-grid"></div>
@@ -152,7 +153,7 @@
     <div class="card" id="log-card">
       <div class="card-header">
         &#128196; {{ tr('log') }}
-        <button class="btn btn-sm btn-secondary" onclick="clearLog()" style="float:right">&#128465;</button>
+        <button type="button" id="clear-log-btn" class="btn btn-sm btn-secondary" style="float:right" aria-label="Clear log">&#128465;</button>
       </div>
       <div id="log-area" class="log-area"></div>
     </div>

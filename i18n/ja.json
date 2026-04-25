@@ -15,6 +15,7 @@
   "status_ready": "準備完了",
   "status_running": "処理中: {current}/{total} ({pct:.1f}%)",
   "status_done": "完了",
+  "status_failed": "失敗",
   "status_stopped": "停止済み",
   "status_starting": "開始中...",
   "status_stopping": "停止中...",

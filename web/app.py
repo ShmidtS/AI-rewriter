@@ -2,28 +2,30 @@
 Flask web interface for AI Book Rewriter.
 Provides web-like UI with real-time SSE progress streaming.
 """
-import os
+import contextlib
 import json
-import threading
-import queue
 import logging
+import os
+import queue
+import re
+import secrets
+import threading
 import uuid
+from functools import wraps
 from pathlib import Path
+from typing import Any
 
-from flask import (
-    Flask, render_template, request, jsonify, Response,
-    send_file, redirect, url_for
-)
+from flask import Flask, Response, jsonify, render_template, request, send_file, session
 from werkzeug.utils import secure_filename
 
-from core.services import RewriteService, ModelProvider, RewriteParams, RewriteStatus
-from core.services.rewrite_service import get_rewrite_service
-from core.services.model_provider import get_model_provider
-from core.prompts import get_preset_names
 from core.config import FINAL_SUFFIX
-from core.settings import get_settings, reload_settings
-from i18n import tr, set_language, get_supported_languages, get_output_languages
+from core.prompts import get_preset_names
+from core.services import ModelProvider, RewriteParams, RewriteService
+from core.services.model_provider import get_model_provider
 from core.services.prompt_service import get_prompt_service
+from core.services.rewrite_service import get_rewrite_service
+from core.settings import get_settings, reload_settings
+from i18n import get_output_languages, get_supported_languages, set_language, tr
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,57 @@ _event_queues: list = []
 _active_job: dict = {}
 UPLOAD_FOLDER = Path("uploads")
 OUTPUT_FOLDER = Path("outputs")
+ALLOWED_EXTENSIONS = {'.txt'}
+_SAFE_PATH_PARAM_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_upload_filename(filename: str) -> str:
+    safe = secure_filename(filename)
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise ValueError("Only .txt files supported")
+    if not safe or safe == extension.lstrip("."):
+        safe = f"upload_{uuid.uuid4().hex[:8]}{extension}"
+    return safe
+
+
+def _validate_output_filename(filename: str) -> str:
+    if "/" in filename or "\\" in filename:
+        raise ValueError("Invalid output filename")
+    safe = secure_filename(filename)
+    if not safe:
+        raise ValueError("Invalid output filename")
+    if Path(safe).suffix.lower() != ".txt":
+        safe += ".txt"
+    return safe
+
+
+def _validate_int_field(value: Any, field_name: str, min_val: int, max_val: int, default: int) -> int:
+    if value in (None, ""):
+        parsed = default
+    else:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid {field_name}") from exc
+    return max(min_val, min(max_val, parsed))
+
+
+def _validate_language(lang: str) -> str:
+    if not lang:
+        return ""
+    supported = set(get_output_languages())
+    supported.update(get_supported_languages().keys())
+    if lang in supported:
+        return lang
+    return ""
+
+
+def _validate_safe_path_param(value: str, field_name: str) -> str:
+    if not value or not _SAFE_PATH_PARAM_RE.fullmatch(value):
+        raise ValueError(f"Invalid {field_name}")
+    return value
+
 
 # Service instances
 _rewrite_service: RewriteService | None = None
@@ -63,6 +116,7 @@ def create_app() -> Flask:
     # Create Flask app
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024 # 100 MB
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
     _app_instance = app
     return app
@@ -73,6 +127,30 @@ def create_app() -> Flask:
 app = create_app()
 
 
+def _get_csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        session["csrf_token"] = token
+    return token
+
+
+def require_csrf(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if request.method == "POST":
+            token = request.headers.get("X-CSRF-Token", "")
+            if not token or not secrets.compare_digest(token, _get_csrf_token()):
+                return jsonify({"error": "Invalid CSRF token"}), 403
+        return func(*args, **kwargs)
+    return wrapper
+
+
+@app.route("/api/csrf-token")
+def api_csrf_token():
+    return jsonify({"csrf_token": _get_csrf_token()})
+
+
 def _broadcast(event: str, data: dict):
     """Push SSE event to all connected clients."""
     msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -80,10 +158,8 @@ def _broadcast(event: str, data: dict):
         raise RuntimeError("Job lock not initialized")
     with _job_lock:
         for q in list(_event_queues):
-            try:
+            with contextlib.suppress(queue.Full):
                 q.put_nowait(msg)
-            except queue.Full:
-                pass
 
 
 def _progress_cb(current: int, total: int):
@@ -119,10 +195,12 @@ def index():
         categories=categories,
         output_languages=get_output_languages(),
         active_job=_get_job_status(),
+        csrf_token=_get_csrf_token(),
     )
 
 
 @app.route("/api/start", methods=["POST"])
+@require_csrf
 def api_start():
     if _rewrite_service is None:
         logger.error("POST /api/start - Service not initialized")
@@ -137,45 +215,47 @@ def api_start():
         logger.warning("POST /api/start - No file uploaded")
         return jsonify({"error": "No file uploaded"}), 400
 
-    # Check original filename for .txt extension BEFORE secure_filename
-    # (secure_filename strips non-ASCII chars, turning "файл.txt" into "txt")
-    original_filename = uploaded.filename
-    if not original_filename.lower().endswith(".txt"):
-        logger.warning(f"POST /api/start - Rejected: '{original_filename}' is not .txt")
-        return jsonify({"error": "Only .txt files supported"}), 400
+    try:
+        filename = _validate_upload_filename(uploaded.filename)
+        uploaded.stream.seek(0, os.SEEK_END)
+        file_size = uploaded.stream.tell()
+        uploaded.stream.seek(0)
+        if file_size <= 0:
+            raise ValueError("Uploaded file is empty")
 
-    # Generate safe filename - use secure_filename, but if it strips everything,
-    # fall back to a UUID-based name
-    filename = secure_filename(original_filename)
-    if not filename or filename == "txt":
-        # secure_filename stripped all non-ASCII chars, generate a safe name
-        filename = f"upload_{uuid.uuid4().hex[:8]}.txt"
+        output_file_param = request.form.get("output_file", "").strip()
+        if output_file_param:
+            output_name = _validate_output_filename(output_file_param)
+        else:
+            output_name = Path(filename).stem + FINAL_SUFFIX
+        max_workers = _validate_int_field(
+            request.form.get("parallel_max_workers"),
+            "parallel_max_workers",
+            1,
+            8,
+            4,
+        )
+        language = _validate_language(request.form.get("language", "Русский")) or "Русский"
+        output_language = _validate_language(request.form.get("output_language", ""))
+    except ValueError as exc:
+        logger.warning("POST /api/start - Validation failed: %s", exc)
+        return jsonify({"error": str(exc)}), 400
 
     input_path = UPLOAD_FOLDER / filename
     uploaded.save(str(input_path))
-    
-    # Use user-specified output filename or auto-generate
-    output_file_param = request.form.get("output_file", "").strip()
-    if output_file_param:
-        # Sanitize and use user-specified name
-        output_name = secure_filename(output_file_param)
-        if not output_name.endswith(".txt"):
-            output_name += ".txt"
-    else:
-        output_name = Path(filename).stem + FINAL_SUFFIX
     output_path = OUTPUT_FOLDER / output_name
-    
+
     params = RewriteParams(
         input_file=str(input_path),
         output_file=str(output_path),
-        language=request.form.get("language", "Русский"),
-        output_language=request.form.get("output_language", ""),
+        language=language,
+        output_language=output_language,
         style=request.form.get("style", ""),
         goal=request.form.get("goal", ""),
         model=request.form.get("model", ""),
         resume=request.form.get("resume", "true").lower() == "true",
         parallel=request.form.get("parallel_mode", "false").lower() == "true",
-        max_workers=int(request.form.get("parallel_max_workers", 4)),
+        max_workers=max_workers,
         save_interval=1,
         prompt_preset=request.form.get("prompt_preset", "literary"),
     )
@@ -188,7 +268,7 @@ def api_start():
         progress_callback=_progress_cb,
         log_callback=_log_cb,
     )
-    
+
     if started:
         return jsonify({"status": "started", "output": output_name})
     else:
@@ -196,6 +276,7 @@ def api_start():
 
 
 @app.route("/api/stop", methods=["POST"])
+@require_csrf
 def api_stop():
     if _rewrite_service:
         _rewrite_service.stop_rewrite()
@@ -226,6 +307,10 @@ def api_prompts():
 @app.route("/api/prompts/<prompt_id>")
 def api_prompt_detail(prompt_id: str):
     """Get a specific prompt by ID with localized content."""
+    try:
+        prompt_id = _validate_safe_path_param(prompt_id, "prompt_id")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
     lang = request.args.get("lang", "en")
     prompt_service = get_prompt_service()
     prompt = prompt_service.get_prompt_for_api(prompt_id, lang)
@@ -246,7 +331,12 @@ def api_prompt_categories():
 @app.route("/api/download/<filename>")
 def api_download(filename):
     safe = secure_filename(filename)
-    path = OUTPUT_FOLDER / safe
+    if not safe or safe != filename:
+        return jsonify({"error": "Invalid filename"}), 404
+    output_dir = OUTPUT_FOLDER.resolve()
+    path = (output_dir / safe).resolve()
+    if output_dir not in path.parents and path != output_dir:
+        return jsonify({"error": "Invalid filename"}), 404
     if not path.exists():
         return jsonify({"error": "File not found"}), 404
     return send_file(str(path), as_attachment=True)
@@ -275,11 +365,8 @@ def events():
         finally:
             if _job_lock is None:
                 raise RuntimeError("Job lock not initialized")
-            with _job_lock:
-                try:
-                    _event_queues.remove(q)
-                except ValueError:
-                    pass
+            with _job_lock, contextlib.suppress(ValueError):
+                _event_queues.remove(q)
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -313,6 +400,10 @@ def api_output_languages():
 @app.route("/api/i18n/<lang>.json")
 def api_i18n(lang: str):
     """Get translations for frontend JavaScript."""
+    try:
+        lang = _validate_safe_path_param(lang, "lang")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
     from i18n import _load
     translations = _load(lang)
     # Merge with fallback language
@@ -338,6 +429,7 @@ def api_settings_get():
 
 
 @app.route("/api/settings", methods=["POST"])
+@require_csrf
 def api_settings_set():
     """Update non-sensitive settings and persist to .env."""
     data = request.get_json(silent=True)
@@ -414,6 +506,10 @@ def api_settings_set():
 @app.route("/api/presets/by-category/<category>")
 def api_presets_by_category(category: str):
     """Return prompts filtered by category."""
+    try:
+        category = _validate_safe_path_param(category, "category")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
     lang = request.args.get("lang", "en")
     prompt_svc = get_prompt_service()
     prompts = prompt_svc.get_prompts_by_category(category, lang)

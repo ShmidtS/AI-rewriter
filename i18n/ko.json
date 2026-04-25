@@ -15,6 +15,7 @@
   "status_ready": "준비 완료",
   "status_running": "처리 중: {current}/{total} ({pct:.1f}%)",
   "status_done": "완료",
+  "status_failed": "실패",
   "status_stopped": "중지됨",
   "status_starting": "시작 중...",
   "status_stopping": "중지 중...",

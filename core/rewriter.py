@@ -3,11 +3,14 @@ Main rewriting orchestration loop.
 Decoupled from GUI — works headless or with any frontend.
 """
 
+import json
 import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, cast
 
 from core.api_client import call_local_rewrite_api
 from core.config import (
@@ -23,14 +26,153 @@ from core.config import (
 )
 from core.context import GlobalContext
 from core.prompts import create_rewrite_prompt, get_system_prompt
-from core.state_manager import load_state, save_intermediate, save_state
+from core.state_manager import BlockState, RewriteState, StateManager, load_state, save_intermediate
 from core.text_engine import count_chars, split_into_blocks
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class RewriteParams:
+    input_file: str
+    output_file: str
+    language: str
+    style: str
+    goal: str
+    model_name: str
+    resume: bool
+    save_interval: int
+    prompt_preset: str
+    base_url: str
+    token: str
+    output_language: str
+    target_language: str
+
+
+def _normalize_params(params: Mapping[str, Any]) -> RewriteParams:
+    input_file = str(params["input_file"])
+    output_file = str(params["output_file"])
+    language = str(params["language"])
+    style = str(params["style"])
+    goal = str(params["goal"])
+    model_name = str(params["rewriter_model"])
+    resume = bool(params.get("resume", True))
+    save_interval = int(params.get("save_interval", 1))
+    prompt_preset = str(params.get("prompt_preset", "literary"))
+    base_url = str(params.get("base_url") or LOCAL_API_BASE_URL)
+    token = str(params.get("token") or LOCAL_API_TOKEN)
+    output_language = str(params.get("output_language", ""))
+    target_language = output_language if output_language and output_language != language else language
+    return RewriteParams(
+        input_file=input_file,
+        output_file=output_file,
+        language=language,
+        style=style,
+        goal=goal,
+        model_name=model_name,
+        resume=resume,
+        save_interval=save_interval,
+        prompt_preset=prompt_preset,
+        base_url=base_url,
+        token=token,
+        output_language=output_language,
+        target_language=target_language,
+    )
+
+
+def _prepare_output_path(output_path: str, input_path: str) -> str:
+    del input_path
+    output_dir = os.path.dirname(output_path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    return output_path
+
+
+def _get_output_paths(output_path: str) -> tuple[str, str, str, str]:
+    output_dir = os.path.dirname(output_path) or "."
+    base_name = os.path.splitext(os.path.basename(output_path))[0]
+    state_file = os.path.join(output_dir, base_name + STATE_SUFFIX)
+    intermediate_file = os.path.join(output_dir, base_name + INTERMEDIATE_SUFFIX)
+    return output_dir, base_name, state_file, intermediate_file
+
+
+def _load_or_init_state(params: RewriteParams, output_path: str) -> tuple[RewriteState | None, int]:
+    _, _, state_file, _ = _get_output_paths(output_path)
+    if not params.resume:
+        return None, -1
+    state = load_state(state_file)
+    if not state:
+        return None, -1
+    return state, state.get("processed_block_index", -1)
+
+
+def _init_blocks(text: str, chunk_size: int, chunk_overlap: int) -> list[BlockState]:
+    del chunk_overlap
+    blocks = split_into_blocks(text, chunk_size)
+    return cast(list[BlockState], blocks or [])
+
+
+def _rewrite_single_block(
+    block: dict[str, Any],
+    block_idx: int,
+    params: RewriteParams,
+    api_fn,
+    prompt_fn,
+    context: str,
+) -> str:
+    block_text = block["text"]
+    original_block_length = block.get("original_char_length", len(block_text))
+    min_len_api = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
+    max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
+    system_instr = get_system_prompt(params.prompt_preset, min_len_api, max_len_api)
+    user_content = prompt_fn(
+        params.target_language,
+        params.style,
+        params.goal,
+        block_text,
+        block.get("prev_block_text", ""),
+        block.get("next_block_text", ""),
+        original_block_length,
+        context,
+    )
+    result = api_fn(
+        system_instruction=system_instr,
+        user_content=user_content,
+        model_name=params.model_name,
+        orig_len=original_block_length,
+        original=block_text,
+        prev_block=block.get("prev_block_text", ""),
+        next_block=block.get("next_block_text", ""),
+        stop_event=block.get("stop_event"),
+        global_context=context,
+        failed_attempts=block.get("failed_attempts", 0),
+        previous_quality_metrics=block.get("last_quality_metrics"),
+        base_url=params.base_url,
+        token=params.token,
+    )
+    if result is None:
+        raise RuntimeError(f"Block {block_idx + 1}: API failed")
+    new_text, context_update = result
+    block["context_update"] = context_update
+    return new_text
+
+
+def _save_progress(state_manager: StateManager, state: RewriteState, block_idx: int, force: bool = False) -> None:
+    state["processed_block_index"] = block_idx
+    state["timestamp"] = time.time()
+    state_manager.set_state(state, processed_chunks=1)
+    state_manager.save_if_dirty(force=force)
+
+
+def _finalize_output(output_path: str, blocks: list[dict[str, str]]) -> str:
+    output_dir, base_name, _, _ = _get_output_paths(output_path)
+    final_file = os.path.join(output_dir, base_name + FINAL_SUFFIX)
+    final_text = "".join(block["text"] for block in blocks)
+    save_intermediate(final_file, final_text, "Final")
+    return final_file
+
+
 def rewrite_process(
-    params: dict,
+    params: Mapping[str, Any],
     progress_callback: Callable[[int, int], None] | None = None,
     stop_event: threading.Event | None = None,
     log_callback: Callable[[str], None] | None = None,
@@ -60,32 +202,20 @@ def rewrite_process(
         if log_callback:
             log_callback(msg)
 
-    input_file = params["input_file"]
-    output_file = params["output_file"]
-    language = params["language"]
-    style = params["style"]
-    goal = params["goal"]
-    model_name = params["rewriter_model"]
-    resume = params.get("resume", True)
-    save_interval = params.get("save_interval", 1)
-    prompt_preset = params.get("prompt_preset", "literary")
-    base_url = params.get("base_url", LOCAL_API_BASE_URL)
-    token = params.get("token", LOCAL_API_TOKEN)
-    output_language = params.get("output_language", "")
-    # When output_language is explicitly set and differs from input language,
-    # use output_language as the target language for the rewrite prompt
-    target_language = output_language if output_language and output_language != language else language
+    rewrite_params = _normalize_params(params)
 
     if stop_event is None:
         stop_event = threading.Event()
 
-    output_dir = os.path.dirname(output_file) or "."
-    base_name = os.path.splitext(os.path.basename(output_file))[0]
-    state_file = os.path.join(output_dir, base_name + STATE_SUFFIX)
-    intermediate_file = os.path.join(output_dir, base_name + INTERMEDIATE_SUFFIX)
+    output_file = _prepare_output_path(rewrite_params.output_file, rewrite_params.input_file)
+    output_dir, base_name, state_file, intermediate_file = _get_output_paths(output_file)
+    state_manager = StateManager(state_file, save_interval=rewrite_params.save_interval)
 
-    _log(f"Start: {input_file} -> {output_file}")
-    _log(f"Input language: {language} | Target language: {target_language} | Model: {model_name} | Preset: {prompt_preset}")
+    _log(f"Start: {rewrite_params.input_file} -> {output_file}")
+    _log(
+        f"Input language: {rewrite_params.language} | Target language: {rewrite_params.target_language} | "
+        f"Model: {rewrite_params.model_name} | Preset: {rewrite_params.prompt_preset}"
+    )
     if parallel:
         _log(f"Mode: PARALLEL (workers={max_workers if max_workers is not None else 'auto'})")
     else:
@@ -95,60 +225,62 @@ def rewrite_process(
 
     # --- Read input ---
     try:
-        with open(input_file, encoding="utf-8") as f:
+        with open(rewrite_params.input_file, encoding="utf-8") as f:
             original_text = f.read()
         if not original_text.strip():
             _log("Input file is empty.", "error")
             return False
     except FileNotFoundError:
-        _log(f"Input file not found: {input_file}", "error")
+        _log(f"Input file not found: {rewrite_params.input_file}", "error")
         return False
-    except Exception as e:
+    except OSError as e:
         _log(f"Error reading input: {e}", "error")
         return False
 
     _log(f"Input length: {count_chars(original_text)} chars")
 
-    blocks: list[dict] | None = None
+    blocks: list[BlockState] | None = None
     processed_idx = -1
     rewritten_text: str | None = None
     state_loaded = False
 
     # --- Resume ---
-    if resume:
-        state = load_state(state_file)
-        if state:
-            try:
-                with open(intermediate_file) as f:
-                    rewritten_text = f.read()
-                blocks = state["original_blocks_data"]
-                processed_idx = state.get("processed_block_index", -1)
-                state_loaded = True
-                _log(f"Resumed from block {processed_idx + 2}")
-                if "global_context" in state:
-                    global_context = GlobalContext.from_json(state["global_context"])
-            except Exception as e:
-                _log(f"Could not load intermediate file: {e}. Starting fresh.", "warning")
+    state, processed_idx = _load_or_init_state(rewrite_params, output_file)
+    if state:
+        try:
+            with open(intermediate_file) as f:
+                rewritten_text = f.read()
+            blocks = state["original_blocks_data"]
+            state_loaded = True
+            _log(f"Resumed from block {processed_idx + 2}")
+            if "global_context" in state:
+                global_context = GlobalContext.from_json(state["global_context"])
+            state_manager.bind_state(state)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+            _log(f"Could not load intermediate file: {e}. Starting fresh.", "warning")
+            processed_idx = -1
 
     if not state_loaded:
         rewritten_text = original_text
-        blocks = split_into_blocks(original_text, BLOCK_TARGET_CHARS)
+        blocks = _init_blocks(original_text, BLOCK_TARGET_CHARS, 0)
         if not blocks:
             _log("Failed to split text into blocks.", "error")
             return False
         save_intermediate(intermediate_file, rewritten_text, "Init")
-        save_state(
-            state_file,
+        state_manager.set_state(
             {
                 "processed_block_index": -1,
                 "original_blocks_data": blocks,
                 "total_blocks": len(blocks),
                 "timestamp": time.time(),
                 "global_context": global_context.to_json(),
-            },
+            }
         )
+        state_manager.save_if_dirty(force=True)
 
     # blocks is guaranteed non-None at this point (early return if None)
+    assert blocks is not None
+    assert rewritten_text is not None
     total_blocks = len(blocks)
     _log(f"Total blocks: {total_blocks}")
     if progress_callback:
@@ -162,21 +294,14 @@ def rewrite_process(
             original_text=original_text,
             output_dir=output_dir,
             base_name=base_name,
-            state_file=state_file,
+            state_manager=state_manager,
             intermediate_file=intermediate_file,
             stop_event=stop_event,
             progress_callback=progress_callback,
             log_callback=log_callback,
             _log=_log,
             max_workers=max_workers,
-            language=target_language,
-            style=style,
-            goal=goal,
-            model_name=model_name,
-            prompt_preset=prompt_preset,
-            base_url=base_url,
-            token=token,
-            save_interval=save_interval,
+            rewrite_params=rewrite_params,
             global_context=global_context,
             processed_idx=processed_idx,
         )
@@ -184,6 +309,7 @@ def rewrite_process(
     # --- Sequential mode (original behavior) ---
     for i in range(total_blocks):
         if stop_event.is_set():
+            state_manager.save_if_dirty(force=True)
             _log("Stopped by user.")
             break
 
@@ -203,23 +329,21 @@ def rewrite_process(
                 f"Block {i + 1}: invalid bounds [{start}:{end}] (text len {cur_len})",
                 "error",
             )
-            save_state(
-                state_file,
+            state_manager.set_state(
                 {
                     "processed_block_index": processed_idx,
                     "original_blocks_data": blocks,
                     "total_blocks": total_blocks,
                     "timestamp": time.time(),
                     "global_context": global_context.to_json(),
-                },
+                }
             )
+            state_manager.save_if_dirty(force=True)
             break
 
         _log(f"Block {i + 1}/{total_blocks} [{start}:{end}] ({end - start} chars)")
 
         block_text = rewritten_text[start:end]
-        original_block_length = block.get("original_char_length", len(block_text))
-
         # Context windows
         prev_block_text = ""
         if i > 0:
@@ -235,44 +359,39 @@ def rewrite_process(
             if 0 <= ns <= ne <= cur_len:
                 next_block_text = rewritten_text[ns:ne]
 
-        min_len_api = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
-        max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
-
-        system_instr = get_system_prompt(prompt_preset, min_len_api, max_len_api)
-        user_content = create_rewrite_prompt(
-            target_language,
-            style,
-            goal,
-            block_text,
-            prev_block_text,
-            next_block_text,
-            original_block_length,
-            global_context,
-        )
-
-        result = call_local_rewrite_api(
-            system_instruction=system_instr,
-            user_content=user_content,
-            model_name=model_name,
-            orig_len=original_block_length,
-            original=block_text,
-            prev_block=prev_block_text,
-            next_block=next_block_text,
-            stop_event=stop_event,
-            global_context=global_context,
-            failed_attempts=block.get("failed_attempts", 0),
-            previous_quality_metrics=block.get("last_quality_metrics"),
-            base_url=base_url,
-            token=token,
-        )
-
-        if result is None:
+        rewrite_block = {
+            **block,
+            "text": block_text,
+            "prev_block_text": prev_block_text,
+            "next_block_text": next_block_text,
+            "stop_event": stop_event,
+        }
+        try:
+            new_text = _rewrite_single_block(
+                rewrite_block,
+                i,
+                rewrite_params,
+                call_local_rewrite_api,
+                create_rewrite_prompt,
+                global_context,
+            )
+        except RuntimeError:
             _log(f"Block {i + 1}: API failed. Pausing 10s...", "warning")
             time.sleep(10)
             block["failed_attempts"] += 1
+            state_manager.set_state(
+                {
+                    "processed_block_index": processed_idx,
+                    "original_blocks_data": blocks,
+                    "total_blocks": total_blocks,
+                    "timestamp": time.time(),
+                    "global_context": global_context.to_json(),
+                }
+            )
+            state_manager.save_if_dirty(force=True)
             continue
 
-        new_text, context_update = result
+        context_update = rewrite_block["context_update"]
 
         if context_update:
             global_context.update_from_response(context_update)
@@ -298,17 +417,16 @@ def rewrite_process(
         if progress_callback:
             progress_callback(i + 1, total_blocks)
 
-        if save_interval and (i + 1) % save_interval == 0:
-            save_state(
-                state_file,
-                {
-                    "processed_block_index": processed_idx,
-                    "original_blocks_data": blocks,
-                    "total_blocks": total_blocks,
-                    "timestamp": time.time(),
-                    "global_context": global_context.to_json(),
-                },
-            )
+        _save_progress(
+            state_manager,
+            {
+                "processed_block_index": processed_idx,
+                "original_blocks_data": blocks,
+                "total_blocks": total_blocks,
+                "global_context": global_context.to_json(),
+            },
+            processed_idx,
+        )
 
     # Final save
     processed_count = sum(1 for b in blocks if b.get("processed", False))
@@ -317,18 +435,17 @@ def rewrite_process(
     )
     _log(f"Done. Processed: {processed_count}/{total_blocks}. Failed: {failed_count}.")
 
-    final_file = os.path.join(output_dir, base_name + FINAL_SUFFIX)
-    save_intermediate(final_file, rewritten_text, "Final")
-    save_state(
-        state_file,
+    final_file = _finalize_output(output_file, [{"text": rewritten_text}])
+    state_manager.set_state(
         {
             "processed_block_index": processed_idx,
             "original_blocks_data": blocks,
             "total_blocks": total_blocks,
             "timestamp": time.time(),
             "global_context": global_context.to_json(),
-        },
+        }
     )
+    state_manager.save_if_dirty(force=True)
     _log(f"Final result: {final_file}")
 
     if progress_callback:
@@ -339,26 +456,19 @@ def rewrite_process(
 
 def _rewrite_parallel(
     *,
-    blocks: list,
+    blocks: list[BlockState],
     total_blocks: int,
     original_text: str,
     output_dir: str,
     base_name: str,
-    state_file: str,
+    state_manager: StateManager,
     intermediate_file: str,
     stop_event: threading.Event,
     progress_callback: Callable[[int, int], None] | None,
     log_callback: Callable[[str], None] | None,
     _log,
     max_workers: int | None,
-    language: str,
-    style: str,
-    goal: str,
-    model_name: str,
-    prompt_preset: str,
-    base_url: str,
-    token: str,
-    save_interval: int,
+    rewrite_params: RewriteParams,
     global_context: GlobalContext,
     processed_idx: int,
 ) -> bool:
@@ -403,8 +513,6 @@ def _rewrite_parallel(
         block = blocks[block_index]
         start = block["start_char_index"]
         end = block["end_char_index"]
-        original_block_length = block.get("original_char_length", end - start)
-
         _log(f"Block {block_index + 1}/{total_blocks} [{start}:{end}] ({end - start} chars)")
 
         # In parallel mode, extract block text from the ORIGINAL text
@@ -425,41 +533,26 @@ def _rewrite_parallel(
             if 0 <= ns <= ne <= len(original_text):
                 next_block_text = original_text[ns:ne]
 
-        min_len_api = int(original_block_length * MIN_REWRITE_LENGTH_RATIO)
-        max_len_api = int(original_block_length * MAX_REWRITE_LENGTH_RATIO)
-
-        system_instr = get_system_prompt(prompt_preset, min_len_api, max_len_api)
         # Thread-safe: copy global_context under lock to avoid race during read
         with _context_lock:
             context_snapshot = global_context.to_json()
-        user_content = create_rewrite_prompt(
-            language,
-            style,
-            goal,
-            block_text,
-            prev_block_text,
-            next_block_text,
-            original_block_length,
-            GlobalContext.from_json(context_snapshot),
-        )
-
-        result = call_local_rewrite_api(
-            system_instruction=system_instr,
-            user_content=user_content,
-            model_name=model_name,
-            orig_len=original_block_length,
-            original=block_text,
-            prev_block=prev_block_text,
-            next_block=next_block_text,
-            stop_event=stop_event,
-            global_context=global_context,
-            failed_attempts=block.get("failed_attempts", 0),
-            previous_quality_metrics=block.get("last_quality_metrics"),
-            base_url=base_url,
-            token=token,
-        )
-
-        if result is None:
+        rewrite_block = {
+            **block,
+            "text": block_text,
+            "prev_block_text": prev_block_text,
+            "next_block_text": next_block_text,
+            "stop_event": stop_event,
+        }
+        try:
+            new_text = _rewrite_single_block(
+                rewrite_block,
+                block_index,
+                rewrite_params,
+                call_local_rewrite_api,
+                create_rewrite_prompt,
+                GlobalContext.from_json(context_snapshot),
+            )
+        except RuntimeError:
             _log(f"Block {block_index + 1}: API failed.", "warning")
             block["failed_attempts"] += 1
             with results_lock:
@@ -467,7 +560,7 @@ def _rewrite_parallel(
             _report_progress(progress_counter[0], len(already_done))
             return False
 
-        new_text, context_update = result
+        context_update = rewrite_block["context_update"]
 
         if context_update:
             global_context.update_from_response(context_update)
@@ -538,19 +631,18 @@ def _rewrite_parallel(
     )
     _log(f"Done. Processed: {processed_count}/{total_blocks}. Failed: {failed_count}.")
 
-    final_file = os.path.join(output_dir, base_name + FINAL_SUFFIX)
-    save_intermediate(final_file, final_text, "Final")
+    final_file = _finalize_output(os.path.join(output_dir, base_name), [{"text": final_text}])
     final_processed_idx = total_blocks - 1 if processed_count == total_blocks else processed_idx
-    save_state(
-        state_file,
+    state_manager.set_state(
         {
             "processed_block_index": final_processed_idx,
             "original_blocks_data": blocks,
             "total_blocks": total_blocks,
             "timestamp": time.time(),
             "global_context": global_context.to_json(),
-        },
+        }
     )
+    state_manager.save_if_dirty(force=True)
     _log(f"Final result: {final_file}")
 
     if progress_callback:
